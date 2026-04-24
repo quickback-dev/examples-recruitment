@@ -1,0 +1,30 @@
+{
+  "name": "q-recruit",
+  "version": "0.1.0",
+  "description": "Quickback example — hiring pipeline demo. See https://quickback.dev",
+  "private": true,
+  "scripts": {
+    "predev": "node scripts/ensure-dev-vars.mjs && npm run db:migrate:local",
+    "dev": "wrangler dev",
+    "build": "tsc",
+    "compile": "npx @quickback-dev/cli compile",
+    "db:migrate:local": "wrangler d1 migrations apply q-recruit-auth --local && wrangler d1 migrations apply q-recruit-features --local && wrangler d1 migrations apply q-recruit-webhooks --local",
+    "db:migrate:remote": "wrangler d1 migrations apply q-recruit-auth --remote && wrangler d1 migrations apply q-recruit-features --remote && wrangler d1 migrations apply q-recruit-webhooks --remote",
+    "predeploy": "npm run db:migrate:remote",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "hono": "^4.0.0",
+    "zod": "^4.0.0",
+    "drizzle-orm": "^0.44.5",
+    "better-auth": "^1.4.10",
+    "@paralleldrive/cuid2": "^2.2.2"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "drizzle-kit": "^0.31.8",
+    "wrangler": "^3.100.0",
+    "@cloudflare/workers-types": "^4.20241230.0",
+    "@better-auth/cli": "^1.4.10"
+  }
+}

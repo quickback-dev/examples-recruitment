@@ -1,0 +1,8 @@
+# Local development environment variables (consumed by wrangler dev).
+# `npm run dev` automatically copies this to .dev.vars on first run.
+#
+# For PRODUCTION, do NOT commit .dev.vars — use `wrangler secret put` instead:
+#   wrangler secret put BETTER_AUTH_SECRET
+
+# Signing secret for Better Auth (JWTs, sessions). Change for real deployments.
+BETTER_AUTH_SECRET=dev-only-secret-please-change-for-production-a8b9c0d1e2f3g4h5i6j7

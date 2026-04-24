@@ -1,0 +1,803 @@
+{
+  "generatedAt": "2026-04-18T03:19:39.420Z",
+  "generatedBy": "quickback-compiler",
+  "version": "0.9.0",
+  "features": {
+    "applications": [
+      "applications.ts",
+      "actions.ts"
+    ],
+    "candidates": [
+      "candidates.ts"
+    ],
+    "jobs": [
+      "jobs.ts"
+    ]
+  },
+  "tables": {
+    "applications": {
+      "name": "applications",
+      "dbName": "applications",
+      "apiPath": "applications",
+      "feature": "applications",
+      "columns": [
+        {
+          "name": "id",
+          "dbName": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        {
+          "name": "createdAt",
+          "dbName": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        {
+          "name": "createdBy",
+          "dbName": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        {
+          "name": "modifiedAt",
+          "dbName": "modified_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        {
+          "name": "modifiedBy",
+          "dbName": "modified_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        {
+          "name": "deletedAt",
+          "dbName": "deleted_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        {
+          "name": "jobId",
+          "dbName": "jobId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "fkTarget": "jobs"
+        },
+        {
+          "name": "candidateId",
+          "dbName": "candidateId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "fkTarget": "candidates"
+        },
+        {
+          "name": "status",
+          "dbName": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "defaultValue": "applied"
+        },
+        {
+          "name": "notes",
+          "dbName": "notes",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        {
+          "name": "organizationId",
+          "dbName": "organizationId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        }
+      ],
+      "firewall": {
+        "organization": {},
+        "softDelete": {}
+      },
+      "crud": {
+        "list": {
+          "access": {
+            "roles": [
+              "owner",
+              "admin",
+              "member"
+            ]
+          }
+        },
+        "get": {
+          "access": {
+            "roles": [
+              "owner",
+              "admin",
+              "member"
+            ]
+          }
+        },
+        "create": {
+          "access": {
+            "roles": [
+              "owner",
+              "admin",
+              "member"
+            ]
+          }
+        },
+        "update": {
+          "access": {
+            "roles": [
+              "owner",
+              "admin"
+            ]
+          }
+        },
+        "delete": {
+          "access": {
+            "roles": [
+              "owner"
+            ]
+          },
+          "mode": "soft"
+        },
+        "batchCreate": {
+          "access": {
+            "roles": [
+              "owner",
+              "admin",
+              "member"
+            ]
+          },
+          "maxBatchSize": 100,
+          "allowAtomic": true
+        },
+        "batchUpdate": {
+          "access": {
+            "roles": [
+              "owner",
+              "admin"
+            ]
+          },
+          "maxBatchSize": 100,
+          "allowAtomic": true
+        },
+        "batchDelete": {
+          "access": {
+            "roles": [
+              "owner"
+            ]
+          },
+          "mode": "soft",
+          "maxBatchSize": 100,
+          "allowAtomic": true
+        }
+      },
+      "guards": {
+        "createable": [
+          "jobId",
+          "candidateId",
+          "notes",
+          "appliedAt"
+        ],
+        "updatable": [
+          "notes"
+        ],
+        "immutable": [
+          "jobId",
+          "candidateId"
+        ],
+        "protected": {
+          "status": [
+            "advance",
+            "reject",
+            "hire",
+            "withdraw"
+          ]
+        }
+      },
+      "masking": {},
+      "views": {
+        "pipeline": {
+          "fields": [
+            "id",
+            "jobId",
+            "candidateId",
+            "status",
+            "appliedAt"
+          ],
+          "access": {
+            "roles": [
+              "owner",
+              "admin",
+              "member"
+            ]
+          }
+        }
+      },
+      "validation": {},
+      "actions": [
+        {
+          "name": "advance",
+          "description": "Move an application forward in the pipeline.",
+          "inputFields": [
+            {
+              "name": "nextStatus",
+              "type": "enum",
+              "required": true
+            },
+            {
+              "name": "notes",
+              "type": "string",
+              "required": false
+            }
+          ],
+          "access": {
+            "roles": [
+              "owner",
+              "admin"
+            ],
+            "record": {
+              "status": {
+                "in": [
+                  "applied",
+                  "screening",
+                  "interview"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "name": "hire",
+          "description": "Finalize an offer — the candidate accepted.",
+          "inputFields": [],
+          "access": {
+            "roles": [
+              "owner"
+            ],
+            "record": {
+              "status": {
+                "equals": "offer"
+              }
+            }
+          }
+        },
+        {
+          "name": "reject",
+          "description": "Reject an application with an optional reason.",
+          "inputFields": [
+            {
+              "name": "reason",
+              "type": "string",
+              "required": false
+            }
+          ],
+          "access": {
+            "roles": [
+              "owner",
+              "admin"
+            ],
+            "record": {
+              "status": {
+                "notIn": [
+                  "hired",
+                  "withdrawn"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "name": "withdraw",
+          "description": "Candidate withdrew their application.",
+          "inputFields": [],
+          "access": {
+            "roles": [
+              "owner",
+              "admin",
+              "member"
+            ],
+            "record": {
+              "status": {
+                "notIn": [
+                  "hired",
+                  "rejected",
+                  "withdrawn"
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "candidates": {
+      "name": "candidates",
+      "dbName": "candidates",
+      "apiPath": "candidates",
+      "feature": "candidates",
+      "columns": [
+        {
+          "name": "id",
+          "dbName": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        {
+          "name": "createdAt",
+          "dbName": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        {
+          "name": "createdBy",
+          "dbName": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        {
+          "name": "modifiedAt",
+          "dbName": "modified_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        {
+          "name": "modifiedBy",
+          "dbName": "modified_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        {
+          "name": "deletedAt",
+          "dbName": "deleted_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        {
+          "name": "name",
+          "dbName": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        {
+          "name": "email",
+          "dbName": "email",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        {
+          "name": "phone",
+          "dbName": "phone",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        {
+          "name": "resumeUrl",
+          "dbName": "resumeUrl",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        {
+          "name": "source",
+          "dbName": "source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "defaultValue": "other"
+        },
+        {
+          "name": "internalNotes",
+          "dbName": "internalNotes",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        {
+          "name": "organizationId",
+          "dbName": "organizationId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        }
+      ],
+      "firewall": {
+        "organization": {},
+        "softDelete": {}
+      },
+      "crud": {
+        "list": {
+          "access": {
+            "roles": [
+              "owner",
+              "admin",
+              "member"
+            ]
+          }
+        },
+        "get": {
+          "access": {
+            "roles": [
+              "owner",
+              "admin",
+              "member"
+            ]
+          }
+        },
+        "create": {
+          "access": {
+            "roles": [
+              "owner",
+              "admin"
+            ]
+          }
+        },
+        "update": {
+          "access": {
+            "roles": [
+              "owner",
+              "admin"
+            ]
+          }
+        },
+        "delete": {
+          "access": {
+            "roles": [
+              "owner"
+            ]
+          },
+          "mode": "soft"
+        },
+        "batchCreate": {
+          "access": {
+            "roles": [
+              "owner",
+              "admin"
+            ]
+          },
+          "maxBatchSize": 100,
+          "allowAtomic": true
+        },
+        "batchUpdate": {
+          "access": {
+            "roles": [
+              "owner",
+              "admin"
+            ]
+          },
+          "maxBatchSize": 100,
+          "allowAtomic": true
+        },
+        "batchDelete": {
+          "access": {
+            "roles": [
+              "owner"
+            ]
+          },
+          "mode": "soft",
+          "maxBatchSize": 100,
+          "allowAtomic": true
+        }
+      },
+      "guards": {
+        "createable": [
+          "name",
+          "email",
+          "phone",
+          "resumeUrl",
+          "source",
+          "internalNotes"
+        ],
+        "updatable": [
+          "name",
+          "email",
+          "phone",
+          "resumeUrl",
+          "source",
+          "internalNotes"
+        ],
+        "immutable": [],
+        "protected": {}
+      },
+      "masking": {
+        "email": {
+          "type": "email",
+          "show": {
+            "roles": [
+              "owner",
+              "admin"
+            ]
+          }
+        },
+        "phone": {
+          "type": "phone",
+          "show": {
+            "roles": [
+              "owner",
+              "admin"
+            ]
+          }
+        },
+        "internalNotes": {
+          "type": "redact",
+          "show": {
+            "roles": [
+              "owner",
+              "admin"
+            ]
+          }
+        }
+      },
+      "views": {
+        "pipeline": {
+          "fields": [
+            "id",
+            "name",
+            "source"
+          ],
+          "access": {
+            "roles": [
+              "owner",
+              "admin",
+              "member"
+            ]
+          }
+        },
+        "full": {
+          "fields": [
+            "id",
+            "name",
+            "email",
+            "phone",
+            "resumeUrl",
+            "source",
+            "internalNotes"
+          ],
+          "access": {
+            "roles": [
+              "owner",
+              "admin"
+            ]
+          }
+        }
+      },
+      "validation": {},
+      "actions": [],
+      "displayColumn": "name"
+    },
+    "jobs": {
+      "name": "jobs",
+      "dbName": "jobs",
+      "apiPath": "jobs",
+      "feature": "jobs",
+      "columns": [
+        {
+          "name": "id",
+          "dbName": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        {
+          "name": "createdAt",
+          "dbName": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        {
+          "name": "createdBy",
+          "dbName": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        {
+          "name": "modifiedAt",
+          "dbName": "modified_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        {
+          "name": "modifiedBy",
+          "dbName": "modified_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        {
+          "name": "deletedAt",
+          "dbName": "deleted_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        {
+          "name": "title",
+          "dbName": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        {
+          "name": "department",
+          "dbName": "department",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        {
+          "name": "status",
+          "dbName": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "defaultValue": "draft"
+        },
+        {
+          "name": "salaryMin",
+          "dbName": "salaryMin",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        {
+          "name": "salaryMax",
+          "dbName": "salaryMax",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        {
+          "name": "description",
+          "dbName": "description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        {
+          "name": "organizationId",
+          "dbName": "organizationId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        }
+      ],
+      "firewall": {
+        "organization": {},
+        "softDelete": {}
+      },
+      "crud": {
+        "list": {
+          "access": {
+            "roles": [
+              "owner",
+              "admin",
+              "member"
+            ]
+          }
+        },
+        "get": {
+          "access": {
+            "roles": [
+              "owner",
+              "admin",
+              "member"
+            ]
+          }
+        },
+        "create": {
+          "access": {
+            "roles": [
+              "owner",
+              "admin"
+            ]
+          }
+        },
+        "update": {
+          "access": {
+            "roles": [
+              "owner",
+              "admin"
+            ]
+          }
+        },
+        "delete": {
+          "access": {
+            "roles": [
+              "owner"
+            ]
+          },
+          "mode": "soft"
+        },
+        "batchCreate": {
+          "access": {
+            "roles": [
+              "owner",
+              "admin"
+            ]
+          },
+          "maxBatchSize": 100,
+          "allowAtomic": true
+        },
+        "batchUpdate": {
+          "access": {
+            "roles": [
+              "owner",
+              "admin"
+            ]
+          },
+          "maxBatchSize": 100,
+          "allowAtomic": true
+        },
+        "batchDelete": {
+          "access": {
+            "roles": [
+              "owner"
+            ]
+          },
+          "mode": "soft",
+          "maxBatchSize": 100,
+          "allowAtomic": true
+        }
+      },
+      "guards": {
+        "createable": [
+          "title",
+          "department",
+          "status",
+          "salaryMin",
+          "salaryMax",
+          "description"
+        ],
+        "updatable": [
+          "title",
+          "department",
+          "status",
+          "salaryMin",
+          "salaryMax",
+          "description"
+        ],
+        "immutable": [],
+        "protected": {}
+      },
+      "masking": {},
+      "views": {},
+      "validation": {},
+      "actions": [],
+      "displayColumn": "title"
+    }
+  },
+  "tablesByFeature": {
+    "applications": [
+      "applications"
+    ],
+    "candidates": [
+      "candidates"
+    ],
+    "jobs": [
+      "jobs"
+    ]
+  },
+  "pages": {},
+  "pagesByFeature": {}
+}
