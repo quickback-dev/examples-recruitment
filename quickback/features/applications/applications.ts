@@ -30,7 +30,7 @@ export default feature("applications", {
     notes:          q.text().optional(),
     organizationId: q.text().required(),
   },
-  firewall: { organization: {}, softDelete: {} },
+  firewall: [{ field: 'organizationId', equals: 'ctx.activeOrgId' }, { field: 'deletedAt', isNull: true }],
   guards: {
     createable: ["jobId", "candidateId", "notes", "appliedAt"],
     updatable:  ["notes"],
@@ -40,9 +40,16 @@ export default feature("applications", {
       status: ["advance", "reject", "hire", "withdraw"],
     },
   },
+  read: {
+    access: { roles: ["owner", "admin", "member"] },
+    views: {
+      pipeline: {
+        fields: ["id", "jobId", "candidateId", "status", "appliedAt"],
+        access: { roles: ["owner", "admin", "member"] },
+      },
+    },
+  },
   crud: {
-    list:   { access: { roles: ["owner", "admin", "member"] } },
-    get:    { access: { roles: ["owner", "admin", "member"] } },
     create: { access: { roles: ["owner", "admin", "member"] } },
     update: { access: { roles: ["owner", "admin"] } },
     delete: { access: { roles: ["owner"] }, mode: "soft" },
@@ -51,11 +58,5 @@ export default feature("applications", {
     // Explicit FK-label mappings — would otherwise be inferred by "Id"-stripped convention.
     jobId: "jobs",
     candidateId: "candidates",
-  },
-  views: {
-    pipeline: {
-      fields: ["id", "jobId", "candidateId", "status", "appliedAt"],
-      access: { roles: ["owner", "admin", "member"] },
-    },
   },
 });

@@ -14,22 +14,14 @@ import { masks } from '../../lib/masks';
 
 /**
  * Firewall conditions for candidates
- * Pattern: Organization only
+ * 2 predicates
  */
-export function buildFirewallConditions(ctx: AppContext) {
-  const conditions = [];
-
-  // Organization isolation
-  conditions.push(eq(candidates.organizationId, ctx.activeOrgId!));
-
-  // Soft delete filter
-  conditions.push(isNull(candidates.deletedAt));
-
-  return and(...conditions);
+export function buildFirewallConditions(ctx: AppContext): SQL | undefined {
+  return and(eq(candidates.organizationId, ctx.activeOrgId!), isNull(candidates.deletedAt));
 }
 
 /**
- * Helper for manual routes - wraps handler with auth check and firewall
+ * Helper for manual routes — wraps handler with auth check and firewall
  */
 export async function withFirewall<T>(
   c: Context,
@@ -51,7 +43,7 @@ export const GUARDS_CONFIG = {
   updatable: new Set<string>(['name', 'email', 'phone', 'resumeUrl', 'source', 'internalNotes']),
   protected: {} as Record<string, Set<string>>,
   immutable: new Set<string>(),
-  systemManaged: new Set<string>(['createdAt', 'createdBy', 'modifiedAt', 'modifiedBy', 'deletedAt', 'deletedBy']),
+  systemManaged: new Set<string>(['createdAt', 'createdBy', 'modifiedAt', 'modifiedBy', 'deletedAt', 'deletedBy', 'organizationId']),
 };
 
 /**
@@ -159,22 +151,22 @@ export function validateUpdate(input: Record<string, any>): {
 export function maskCandidate<T extends Record<string, any>>(record: T, ctx: AppContext): T {
   const masked: any = { ...record };
 
-  // email: show to owner, admin
-  if (!(ctx.roles?.some(r => ['owner', 'admin'].includes(r)))) {
+  // email: show to admin, owner
+  if (!(ctx.roles?.some(r => ['admin', 'owner'].includes(r)))) {
     if (masked['email'] != null) {
       masked['email'] = masks.email(masked['email']);
     }
   }
 
-  // phone: show to owner, admin
-  if (!(ctx.roles?.some(r => ['owner', 'admin'].includes(r)))) {
+  // phone: show to admin, owner
+  if (!(ctx.roles?.some(r => ['admin', 'owner'].includes(r)))) {
     if (masked['phone'] != null) {
       masked['phone'] = masks.phone(masked['phone']);
     }
   }
 
-  // internalNotes: show to owner, admin
-  if (!(ctx.roles?.some(r => ['owner', 'admin'].includes(r)))) {
+  // internalNotes: show to admin, owner
+  if (!(ctx.roles?.some(r => ['admin', 'owner'].includes(r)))) {
     if (masked['internalNotes'] != null) {
       masked['internalNotes'] = masks.redact(masked['internalNotes']);
     }
@@ -189,37 +181,19 @@ export function maskCandidates<T extends Record<string, any>>(records: T[], ctx:
 
 // CRUD Access
 export const CRUD_ACCESS = {
-  "list": {
-    "access": {
-      "roles": [
-        "owner",
-        "admin",
-        "member"
-      ]
-    }
-  },
-  "get": {
-    "access": {
-      "roles": [
-        "owner",
-        "admin",
-        "member"
-      ]
-    }
-  },
   "create": {
     "access": {
       "roles": [
-        "owner",
-        "admin"
+        "admin",
+        "owner"
       ]
     }
   },
   "update": {
     "access": {
       "roles": [
-        "owner",
-        "admin"
+        "admin",
+        "owner"
       ]
     }
   },
@@ -243,10 +217,23 @@ export const VIEWS_CONFIG = {
     ],
     "access": {
       "roles": [
-        "owner",
+        "member",
         "admin",
-        "member"
+        "owner"
       ]
+    },
+    "query": {
+      "filterable": [
+        "source"
+      ],
+      "searchable": [
+        "name"
+      ],
+      "sortable": [
+        "createdAt",
+        "name"
+      ],
+      "defaultSort": "-createdAt"
     }
   },
   "full": {
@@ -261,8 +248,25 @@ export const VIEWS_CONFIG = {
     ],
     "access": {
       "roles": [
-        "owner",
-        "admin"
+        "admin",
+        "owner"
+      ]
+    },
+    "query": {
+      "filterable": [
+        "source",
+        "email",
+        "phone"
+      ],
+      "searchable": [
+        "name",
+        "email",
+        "internalNotes"
+      ],
+      "sortable": [
+        "createdAt",
+        "name",
+        "email"
       ]
     }
   }

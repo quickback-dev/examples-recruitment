@@ -23,6 +23,10 @@ export default defineConfig({
     organizations: true,
   },
 
+  auth: {
+    roleHierarchy: ["member", "admin", "owner"],
+  },
+
   providers: {
     runtime: defineRuntime("cloudflare", {
       compatibilityDate: "2025-01-01",
@@ -67,7 +71,4 @@ export default defineConfig({
     }),
   },
 
-  build: {
-    outputDir: ".",
-  },
 });

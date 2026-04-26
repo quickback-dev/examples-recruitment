@@ -15,7 +15,7 @@
  * - firewall-derived column mappings from compiler config
  *
  * Usage:
- *   const db = createScopedDb(rawDb, ctx);
+ *   const db = createScopedDb(unsafeDb, ctx);
  *   // All queries now auto-filter by org, owner, team, and soft delete
  *   await db.select().from(claims).where(eq(claims.status, 'active'));
  *   // → WHERE status = 'active' AND tenant scopes + soft-delete scopes
@@ -79,8 +79,14 @@ function applyScopeRuleConditions(
 
 /**
  * Build scope conditions for a table based on configured/default ownership rules.
+ *
+ * Exported so record-action routes can compose a record-targeted WHERE clause
+ * (`whereRecord(table)`) that AND-merges the same firewall + soft-delete
+ * predicates the scoped DB would otherwise inject. Lets handlers write
+ * protected-field updates with an *explicit* WHERE instead of trusting an
+ * invisible wrapper.
  */
-function buildScopeConditions(table: any, ctx: any) {
+export function buildScopeConditions(table: any, ctx: any) {
   const conditions: any[] = [];
 
   applyScopeRuleConditions(conditions, table, ctx, ORG_SCOPE_RULES);
@@ -151,6 +157,39 @@ export function createScopedDb<T extends object>(db: T, ctx: any): T {
  */
 export function createOrgScopedDb<T extends object>(db: T, orgId: string): T {
   return createScopedDb(db, { activeOrgId: orgId });
+}
+
+/**
+ * Explicit scope for unsafe handlers.
+ *
+ * Attaches a .scopeTo(scope) method to an unscoped Drizzle client. Call it
+ * when the handler derives the tenancy scope from somewhere other than the
+ * ambient request ctx — inbound webhooks, cron jobs, admin tools that
+ * impersonate a tenant. Firewall runs unchanged with a synthesized ctx; no
+ * manual WHERE clauses or per-row scope fields required.
+ *
+ * Usage (unsafe action):
+ *   execute: async ({ unsafeDb, ctx }) => {
+ *     const mailbox = await unsafeDb.select().from(mailboxes)...;
+ *     const db = unsafeDb.scopeTo({ organizationId: mailbox.organizationId });
+ *     await db.insert(messages).values({ ... }); // scope applied
+ *   }
+ */
+export function attachScopeTo<T extends object>(unsafeDb: T, ctx: any): T {
+  (unsafeDb as any).scopeTo = (scope: {
+    organizationId?: string;
+    userId?: string;
+    teamId?: string;
+  }) => {
+    const scopedCtx = {
+      ...ctx,
+      activeOrgId: scope.organizationId ?? ctx?.activeOrgId,
+      userId: scope.userId ?? ctx?.userId,
+      activeTeamId: scope.teamId ?? ctx?.activeTeamId,
+    };
+    return createScopedDb(unsafeDb, scopedCtx);
+  };
+  return unsafeDb;
 }
 
 /**

@@ -7,17 +7,21 @@
  */
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
-import { auth, TRUSTED_ORIGINS } from './lib/auth';
+import { createAuth, type Env, TRUSTED_ORIGINS } from './lib/auth';
 import { authMiddleware } from './middleware/auth';
 import { dbMiddleware } from './middleware/db';
 import { servicesMiddleware } from './middleware/services';
 import type { AppContext } from './lib/types';
 import type { Services } from './lib/services';
 import { signJwt } from './lib/jwt';
+import { mountMcp } from './routes/mcp';
 import applicationsRoutes from './routes/applications';
 import candidatesRoutes from './routes/candidates';
 import jobsRoutes from './routes/jobs';
 
+
+import { webhookRoutes, handleWebhookMessage } from './lib/webhooks';
+import type { WebhookMessage } from './lib/webhooks';
 import schemaRegistry from '../schema-registry.json';
 import openapiSpec from '../openapi.json';
 
@@ -29,6 +33,7 @@ import openapiSpec from '../openapi.json';
 let DEPLOYED_AT: string | null = null;
 
 export const app = new Hono<{
+  Bindings: Env;
   Variables: {
     ctx: AppContext;
     db: any;
@@ -92,7 +97,7 @@ app.get('/health', (c) => {
     DEPLOYED_AT = new Date().toISOString();
   }
   const emailConfigured = Boolean(
-    process.env.CF_ACCOUNT_ID && process.env.CF_API_TOKEN
+    c.env.EMAIL
   );
   return c.json({ status: 'ok', deployedAt: DEPLOYED_AT, emailConfigured });
 });
@@ -100,7 +105,7 @@ app.get('/health', (c) => {
 // Email configuration status (for account UI)
 app.get('/api/v1/system/email-status', (c) => {
   const emailConfigured = Boolean(
-    process.env.CF_ACCOUNT_ID && process.env.CF_API_TOKEN
+    c.env.EMAIL
   );
   return c.json({ emailConfigured });
 });
@@ -112,13 +117,14 @@ app.get('/api/v1/system/email-status', (c) => {
 // Email status (for account UI to check if email is configured)
 app.get('/auth/v1/ses/status', (c) => {
   const emailConfigured = Boolean(
-    process.env.CF_ACCOUNT_ID && process.env.CF_API_TOKEN
+    c.env.EMAIL
   );
   return c.json({ emailConfigured, provider: 'cloudflare' });
 });
 
 // Mark email as verified (called after OTP verification)
 app.post('/auth/v1/verify-email', async (c) => {
+  const auth = createAuth(c.env);
   const session = await auth.api.getSession({ headers: c.req.raw.headers });
   if (!session) {
     return c.json({ error: 'Not authenticated' }, 401);
@@ -141,7 +147,7 @@ app.post('/api/v1/token', async (c) => {
       userRole: (ctx as any).userRole,
       email: ctx.user?.email,
       name: ctx.user?.name,
-    }, process.env.BETTER_AUTH_SECRET!);
+    }, c.env.BETTER_AUTH_SECRET!);
     return c.json({ token: jwt });
   } catch (error) {
     console.error('[AUTH] Token mint error:', error);
@@ -151,6 +157,7 @@ app.post('/api/v1/token', async (c) => {
 
 app.all('/auth/v1/*', async (c) => {
   try {
+    const auth = createAuth(c.env);
     const response = await auth.handler(c.req.raw);
 
     // Patch CORS headers onto raw Response (bypasses Hono middleware)
@@ -189,6 +196,7 @@ app.use('/admin/v1/*', async (c, next) => {
 // Admin: List all organizations (for subscription management)
 app.get('/admin/v1/organizations', async (c) => {
   try {
+    const auth = createAuth(c.env);
     // Use Better Auth's internal method to list organizations
     const result = await (auth.api as any).listOrganizations({ headers: c.req.raw.headers });
     return c.json({ data: result || [] });
@@ -199,12 +207,72 @@ app.get('/admin/v1/organizations', async (c) => {
 });
 
 // ═══════════════════════════════════════════════════════════════════
+// Webhooks Routes (Inbound + Outbound Webhooks)
+// ═══════════════════════════════════════════════════════════════════
+
+app.route('/webhooks/v1', webhookRoutes);
+// ═══════════════════════════════════════════════════════════════════
 // Schema Registry (CMS Metadata Endpoint)
 // ═══════════════════════════════════════════════════════════════════
 
 app.get('/api/v1/schema', authMiddleware, (c) => c.json(schemaRegistry));
 // OpenAPI spec
 app.get('/openapi.json', (c) => c.json(openapiSpec));
+// ═══════════════════════════════════════════════════════════════════
+// Agent Discovery Routes (robots.txt, llms.txt, /.well-known/*)
+// ═══════════════════════════════════════════════════════════════════
+
+app.get('/robots.txt', (c) => {
+  c.header('Content-Type', 'text/plain; charset=utf-8');
+  return c.body("# Cloudflare Content Signals — declares how our content may be used.\n# https://developers.cloudflare.com/bots/concepts/content-signals/\nContent-Signal: search=yes, ai-input=yes, ai-train=no\n\nUser-agent: *\nAllow: /\n\nUser-agent: GPTBot\nAllow: /\n\nUser-agent: ChatGPT-User\nAllow: /\n\nUser-agent: OAI-SearchBot\nAllow: /\n\nUser-agent: ClaudeBot\nAllow: /\n\nUser-agent: Claude-Web\nAllow: /\n\nUser-agent: Claude-User\nAllow: /\n\nUser-agent: anthropic-ai\nAllow: /\n\nUser-agent: PerplexityBot\nAllow: /\n\nUser-agent: Perplexity-User\nAllow: /\n\nUser-agent: Google-Extended\nAllow: /\n\nUser-agent: Applebot-Extended\nAllow: /\n\nUser-agent: CCBot\nAllow: /\n\nUser-agent: Bytespider\nAllow: /\n\nUser-agent: DuckAssistBot\nAllow: /\n\nUser-agent: MistralAI-User\nAllow: /\n\nUser-agent: cohere-ai\nAllow: /\n");
+});
+
+app.get('/llms.txt', (c) => {
+  c.header('Content-Type', 'text/plain; charset=utf-8');
+  return c.body("# q-recruit\n\n> q-recruit is a Quickback-compiled API. This file gives AI agents a quick tour; the machine-readable contract is at `/openapi.json`.\n\n## Discovery\n\n- `GET /openapi.json` — full OpenAPI 3.1 spec\n- `POST /mcp` — MCP (Model Context Protocol) server — one tool per OpenAPI operation, Bearer JWT auth forwarded.\n- `GET /.well-known/mcp.json` — MCP server card\n- `GET /.well-known/api-catalog` — RFC 9727 catalog pointing at the spec\n- `GET /.well-known/oauth-protected-resource` — RFC 9728 OAuth metadata\n- `GET /.well-known/oauth-authorization-server` — RFC 8414 authorization-server metadata\n- `GET /robots.txt` — crawling policy\n- `GET /llms.txt` — this file\n\n## Authentication\n\nAll `/api/v1/*` routes require a Bearer JWT:\n\n```\nAuthorization: Bearer <jwt>\n```\n\nMint a JWT from an authenticated session:\n\n- `POST /api/v1/token` — exchanges a valid Better Auth session for a JWT\n\nSign-in endpoints (Better Auth):\n\n- `POST /auth/v1/sign-in/email` — email + password\n- `POST /auth/v1/sign-in/email-otp` — email one-time code\n- `GET  /auth/v1/sign-in/:provider` — OAuth (Google, GitHub, …) when configured\n\n## Resources\n\nEvery resource exposes the standard CRUD surface:\n\n```\nGET    /api/v1/{resource}              list\nGET    /api/v1/{resource}/{id}         get\nPOST   /api/v1/{resource}              create\nPATCH  /api/v1/{resource}/{id}         update\nDELETE /api/v1/{resource}/{id}         delete\nPOST   /api/v1/{resource}/batch        batch create  (max 100)\nPATCH  /api/v1/{resource}/batch        batch update\nDELETE /api/v1/{resource}/batch        batch delete\nGET    /api/v1/{resource}/views/{view} view  (named field projection)\n```\n\nCustom actions live at `POST /api/v1/{resource}/{actionName}`.\n\n### Resources in this API\n\n- `applications` — `GET /api/v1/applications` and CRUD siblings\n- `candidates` — `GET /api/v1/candidates` and CRUD siblings\n- `jobs` — `GET /api/v1/jobs` and CRUD siblings\n\n## Conventions\n\n- Request & response bodies are JSON.\n- List endpoints accept `?limit=`, `?offset=`, `?orderBy=`, `?filter[field]=` query params.\n- Errors follow `{ error: { code, message, layer } }` where `layer` is one of `firewall | access | guards | masking | validation`.\n- `ETag` / `If-None-Match` on GET responses.\n\n## Learn more\n\n- Machine-readable spec: `/openapi.json`\n- Quickback docs: https://docs.quickback.dev\n");
+});
+
+app.get('/.well-known/oauth-protected-resource', (c) => {
+  const origin = new URL(c.req.url).origin;
+  return c.json({
+    resource: origin,
+    authorization_servers: [origin],
+    scopes_supported: ['read', 'write'],
+    bearer_methods_supported: ['header'],
+    resource_documentation: origin + '/llms.txt',
+  });
+});
+
+app.get('/.well-known/oauth-authorization-server', (c) => {
+  const origin = new URL(c.req.url).origin;
+  return c.json({
+    issuer: origin,
+    authorization_endpoint: origin + '/auth/v1/sign-in/email',
+    token_endpoint: origin + '/api/v1/token',
+    token_endpoint_auth_methods_supported: ['client_secret_post'],
+    grant_types_supported: ['authorization_code', 'password'],
+    response_types_supported: ['code'],
+    scopes_supported: ['read', 'write'],
+    service_documentation: origin + '/llms.txt',
+  });
+});
+
+app.get('/.well-known/api-catalog', (c) => {
+  const origin = new URL(c.req.url).origin;
+  return c.json({
+    linkset: [{
+      anchor: origin,
+      'service-desc': [{ href: origin + '/openapi.json', type: 'application/vnd.oai.openapi+json' }],
+      'service-doc': [{ href: origin + '/llms.txt', type: 'text/plain' }],
+    }],
+  });
+});
+// ═══════════════════════════════════════════════════════════════════
+// MCP server (auto-generated from OpenAPI — see src/routes/mcp.ts)
+// ═══════════════════════════════════════════════════════════════════
+
+mountMcp(app);
+
 // ═══════════════════════════════════════════════════════════════════
 // Feature Routes
 // ═══════════════════════════════════════════════════════════════════
@@ -214,15 +282,22 @@ app.route('/api/v1/candidates', candidatesRoutes);
 app.route('/api/v1/jobs', jobsRoutes);
 
 // ═══════════════════════════════════════════════════════════════════
-// Start Server
+// Export (combined fetch + queue handlers for Cloudflare)
 // ═══════════════════════════════════════════════════════════════════
 
-const port = process.env.PORT || 3000;
-console.log(`Server running on http://localhost:${port}`);
-
 export default {
-  port,
   fetch: app.fetch,
+  async queue(batch: MessageBatch<WebhookMessage>, env: Env): Promise<void> {
+    for (const message of batch.messages) {
+      try {
+        await handleWebhookMessage(message.body, env);
+        message.ack();
+      } catch (error) {
+        console.error('Queue message processing failed:', error);
+        message.retry();
+      }
+    }
+  },
 };
 
 /**

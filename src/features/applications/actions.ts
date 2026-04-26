@@ -10,6 +10,12 @@ import { z } from 'zod';
 import type { AppContext } from '../../lib/types';
 import type { Services } from '../../lib/services';
 
+// Handler imports
+import { execute as advanceExecute } from './handlers/advance';
+import { execute as hireExecute } from './handlers/hire';
+import { execute as rejectExecute } from './handlers/reject';
+import { execute as withdrawExecute } from './handlers/withdraw';
+
 export const actions = {
   "advance": {
     description: "Move an application forward in the pipeline.",
@@ -21,22 +27,24 @@ export const actions = {
           "roles": [
                 "owner",
                 "admin"
-          ],
-          "record": {
-                "status": {
-                      "in": [
-                            "applied",
-                            "screening",
-                            "interview"
-                      ]
-                }
+          ]
+    },
+    transition: {
+          "field": "status",
+          "via": "nextStatus",
+          "fromTo": {
+                "applied": [
+                      "screening"
+                ],
+                "screening": [
+                      "interview"
+                ],
+                "interview": [
+                      "offer"
+                ]
           }
     },
-    execute: async ({ db, ctx, record, input, services }) => {
-      // TODO: Implement advance action logic
-      // This is a placeholder - implement your business logic here
-      return record;
-    },
+    execute: advanceExecute,
   },
   "hire": {
     description: "Finalize an offer — the candidate accepted.",
@@ -44,18 +52,18 @@ export const actions = {
     access: {
           "roles": [
                 "owner"
-          ],
-          "record": {
-                "status": {
-                      "equals": "offer"
-                }
+          ]
+    },
+    transition: {
+          "field": "status",
+          "to": "hired",
+          "fromTo": {
+                "offer": [
+                      "hired"
+                ]
           }
     },
-    execute: async ({ db, ctx, record, input, services }) => {
-      // TODO: Implement hire action logic
-      // This is a placeholder - implement your business logic here
-      return record;
-    },
+    execute: hireExecute,
   },
   "reject": {
     description: "Reject an application with an optional reason.",
@@ -66,21 +74,27 @@ export const actions = {
           "roles": [
                 "owner",
                 "admin"
-          ],
-          "record": {
-                "status": {
-                      "notIn": [
-                            "hired",
-                            "withdrawn"
-                      ]
-                }
+          ]
+    },
+    transition: {
+          "field": "status",
+          "to": "rejected",
+          "fromTo": {
+                "applied": [
+                      "rejected"
+                ],
+                "screening": [
+                      "rejected"
+                ],
+                "interview": [
+                      "rejected"
+                ],
+                "offer": [
+                      "rejected"
+                ]
           }
     },
-    execute: async ({ db, ctx, record, input, services }) => {
-      // TODO: Implement reject action logic
-      // This is a placeholder - implement your business logic here
-      return record;
-    },
+    execute: rejectExecute,
   },
   "withdraw": {
     description: "Candidate withdrew their application.",
@@ -90,22 +104,27 @@ export const actions = {
                 "owner",
                 "admin",
                 "member"
-          ],
-          "record": {
-                "status": {
-                      "notIn": [
-                            "hired",
-                            "rejected",
-                            "withdrawn"
-                      ]
-                }
+          ]
+    },
+    transition: {
+          "field": "status",
+          "to": "withdrawn",
+          "fromTo": {
+                "applied": [
+                      "withdrawn"
+                ],
+                "screening": [
+                      "withdrawn"
+                ],
+                "interview": [
+                      "withdrawn"
+                ],
+                "offer": [
+                      "withdrawn"
+                ]
           }
     },
-    execute: async ({ db, ctx, record, input, services }) => {
-      // TODO: Implement withdraw action logic
-      // This is a placeholder - implement your business logic here
-      return record;
-    },
+    execute: withdrawExecute,
   }
 };
 

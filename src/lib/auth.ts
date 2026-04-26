@@ -5,44 +5,29 @@
  * To make changes, update your config and feature definitions in the quickback/ folder,
  * then run `quickback compile` to regenerate.
  */
+import type { IncomingRequestCfProperties } from "@cloudflare/workers-types";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
-import { organization, admin } from "better-auth/plugins";
+import { organization, bearer, jwt, admin } from "better-auth/plugins";
 import { apiKey } from "@better-auth/api-key";
+import { drizzle } from "drizzle-orm/d1";
+import type { CloudflareBindings } from "../env";
+import * as schema from "../auth/schema";
 
 
+// Uses AUTH_DB binding (dedicated auth database)
 
-export const TRUSTED_ORIGINS = ["http://localhost:3000"] as const;
+export const TRUSTED_ORIGINS = ["http://localhost:8787"] as const;
 
-// Lazy-load database to avoid bun:sqlite import during CLI schema generation
-// (The better-auth CLI runs on Node.js, not Bun)
-let _db: any;
-let _schema: any;
+// Single auth configuration that handles both CLI and runtime scenarios
+function createAuth(env?: CloudflareBindings, cf?: IncomingRequestCfProperties) {
+    // Use actual DB for runtime, empty object for CLI
+    const db = env ? drizzle(env.AUTH_DB, { schema }) : ({} as any);
 
-function getDb() {
-    if (!_db) {
-        try {
-            // Dynamic require avoids top-level evaluation of bun:sqlite
-            const mod = require("../db");
-            _db = mod.authDb;
-            _schema = mod.authSchema;
-        } catch {
-            // CLI mode — bun:sqlite not available, use dummy for schema generation
-            _db = null;
-            _schema = {};
-        }
-    }
-    return { db: _db, schema: _schema };
-}
-
-export const auth = (() => {
-    const { db, schema } = getDb();
-    if (db) {
-        // Runtime mode — use real database
-        return betterAuth({
-            
-            secret: process.env?.BETTER_AUTH_SECRET,
-        baseURL: process.env?.BETTER_AUTH_URL || TRUSTED_ORIGINS[0],
+    return betterAuth({
+        
+        secret: env?.BETTER_AUTH_SECRET,
+        baseURL: env?.BETTER_AUTH_URL || TRUSTED_ORIGINS[0],
         basePath: '/auth/v1',
         trustedOrigins: TRUSTED_ORIGINS as unknown as string[],
         emailAndPassword: {
@@ -51,8 +36,8 @@ export const auth = (() => {
             },
         plugins: [organization({ organizationHooks: {
             afterUpdateMemberRole: async ({ member }: { member: any }) => {
-              const realtimeUrl = process.env.REALTIME_URL;
-              const accessToken = process.env.ACCESS_TOKEN;
+              const realtimeUrl = env?.REALTIME_URL;
+              const accessToken = env?.ACCESS_TOKEN;
               if (!realtimeUrl || !accessToken || !member?.organizationId) return;
               try {
                 await fetch(`${realtimeUrl}/realtime/v1/api/broadcast?organizationId=${member.organizationId}`, {
@@ -62,7 +47,7 @@ export const auth = (() => {
                 });
               } catch {}
             },
-          } }), admin(), apiKey({
+          } }), bearer(), jwt(), admin(), apiKey({
           enableMetadata: true,
           enableSessionForAPIKeys: true,
           rateLimit: {
@@ -74,17 +59,10 @@ export const auth = (() => {
         rateLimit: {
                 enabled: true,
                 window: 60,
-                max: 100,
-                customRules: {
-                  "/sign-in/email": { window: 60, max: 10 },
-                  "/sign-in/social": { window: 60, max: 10 },
-                  "/device/init": { window: 60, max: 5 },
-                  "/device/poll": { window: 60, max: 30 },
-                  "/device/token": { window: 60, max: 10 }
-                }
+                max: 100
             },
         session: {
-                expiresIn: 30 * 24 * 60 * 60,
+                expiresIn: 7 * 24 * 60 * 60,
                 updateAge: 1 * 24 * 60 * 60
             },
         advanced: {
@@ -93,46 +71,23 @@ export const auth = (() => {
                     sameSite: 'lax'
                 }
             },
-    database: drizzleAdapter(db, {
-            provider: "sqlite",
-            schema,
-            usePlural: true,
-            debugLogs: false,
-            camelCase: true,
-        }),
-
-        // Advanced configuration
-        advanced: {
-            ipAddress: {
-                ipAddressHeaders: ["x-forwarded-for", "x-real-ip"],
-            },
-        },
-        });
-    }
-    // CLI mode — dummy adapter for schema generation only
-    return betterAuth({
-        basePath: '/auth/v1',
-        emailAndPassword: {
-                enabled: true,
-                autoSignIn: false
-            },
-        plugins: [organization(), admin(), apiKey({
-          enableMetadata: true,
-          enableSessionForAPIKeys: true,
-          rateLimit: {
-            enabled: true,
-            timeWindow: 60,
-            maxRequests: 100,
-          },
-        })],
-        database: drizzleAdapter({} as D1Database, {
-                  provider: "sqlite",
-                  usePlural: true,
-                  debugLogs: false,
-                  camelCase: true
-              }),
+        database: drizzleAdapter(db, {
+                provider: "sqlite",
+                schema,
+                usePlural: false,
+                debugLogs: false,
+            }),
     });
-})();
+}
+
+// Export for CLI schema generation
+export const auth = createAuth();
+
+// Export for runtime usage
+export { createAuth };
+
+// Export Env type alias for Hono app
+export type Env = CloudflareBindings;
 
 /**
  * Generated by quickback.dev

@@ -1,7 +1,7 @@
 {
-  "generatedAt": "2026-04-18T03:19:39.420Z",
+  "generatedAt": "2026-04-26T17:17:59.784Z",
   "generatedBy": "quickback-compiler",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "features": {
     "applications": [
       "applications.ts",
@@ -65,7 +65,7 @@
         },
         {
           "name": "jobId",
-          "dbName": "jobId",
+          "dbName": "job_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
@@ -73,7 +73,7 @@
         },
         {
           "name": "candidateId",
-          "dbName": "candidateId",
+          "dbName": "candidate_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
@@ -96,35 +96,22 @@
         },
         {
           "name": "organizationId",
-          "dbName": "organizationId",
+          "dbName": "organization_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true
         }
       ],
       "firewall": {
-        "organization": {},
-        "softDelete": {}
+        "organization": {
+          "column": "organizationId",
+          "source": "ctx.activeOrgId"
+        },
+        "softDelete": {
+          "column": "deletedAt"
+        }
       },
       "crud": {
-        "list": {
-          "access": {
-            "roles": [
-              "owner",
-              "admin",
-              "member"
-            ]
-          }
-        },
-        "get": {
-          "access": {
-            "roles": [
-              "owner",
-              "admin",
-              "member"
-            ]
-          }
-        },
         "create": {
           "access": {
             "roles": [
@@ -159,7 +146,7 @@
             ]
           },
           "maxBatchSize": 100,
-          "allowAtomic": true
+          "allowFailFast": true
         },
         "batchUpdate": {
           "access": {
@@ -169,7 +156,7 @@
             ]
           },
           "maxBatchSize": 100,
-          "allowAtomic": true
+          "allowFailFast": true
         },
         "batchDelete": {
           "access": {
@@ -179,7 +166,7 @@
           },
           "mode": "soft",
           "maxBatchSize": 100,
-          "allowAtomic": true
+          "allowFailFast": true
         }
       },
       "guards": {
@@ -245,16 +232,7 @@
             "roles": [
               "owner",
               "admin"
-            ],
-            "record": {
-              "status": {
-                "in": [
-                  "applied",
-                  "screening",
-                  "interview"
-                ]
-              }
-            }
+            ]
           }
         },
         {
@@ -264,12 +242,7 @@
           "access": {
             "roles": [
               "owner"
-            ],
-            "record": {
-              "status": {
-                "equals": "offer"
-              }
-            }
+            ]
           }
         },
         {
@@ -286,15 +259,7 @@
             "roles": [
               "owner",
               "admin"
-            ],
-            "record": {
-              "status": {
-                "notIn": [
-                  "hired",
-                  "withdrawn"
-                ]
-              }
-            }
+            ]
           }
         },
         {
@@ -306,16 +271,7 @@
               "owner",
               "admin",
               "member"
-            ],
-            "record": {
-              "status": {
-                "notIn": [
-                  "hired",
-                  "rejected",
-                  "withdrawn"
-                ]
-              }
-            }
+            ]
           }
         }
       ]
@@ -373,25 +329,30 @@
           "dbName": "name",
           "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": true,
+          "filterable": "like",
+          "searchable": true
         },
         {
           "name": "email",
           "dbName": "email",
           "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": true,
+          "filterable": "eq",
+          "searchable": true
         },
         {
           "name": "phone",
           "dbName": "phone",
           "type": "text",
           "primaryKey": false,
-          "notNull": false
+          "notNull": false,
+          "filterable": "eq"
         },
         {
           "name": "resumeUrl",
-          "dbName": "resumeUrl",
+          "dbName": "resume_url",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -402,59 +363,40 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true,
-          "defaultValue": "other"
+          "defaultValue": "other",
+          "filterable": "eq"
         },
         {
           "name": "internalNotes",
-          "dbName": "internalNotes",
+          "dbName": "internal_notes",
           "type": "text",
           "primaryKey": false,
-          "notNull": false
+          "notNull": false,
+          "searchable": true
         },
         {
           "name": "organizationId",
-          "dbName": "organizationId",
+          "dbName": "organization_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true
         }
       ],
-      "firewall": {
-        "organization": {},
-        "softDelete": {}
-      },
+      "firewall": {},
       "crud": {
-        "list": {
-          "access": {
-            "roles": [
-              "owner",
-              "admin",
-              "member"
-            ]
-          }
-        },
-        "get": {
-          "access": {
-            "roles": [
-              "owner",
-              "admin",
-              "member"
-            ]
-          }
-        },
         "create": {
           "access": {
             "roles": [
-              "owner",
-              "admin"
+              "admin",
+              "owner"
             ]
           }
         },
         "update": {
           "access": {
             "roles": [
-              "owner",
-              "admin"
+              "admin",
+              "owner"
             ]
           }
         },
@@ -469,22 +411,22 @@
         "batchCreate": {
           "access": {
             "roles": [
-              "owner",
-              "admin"
+              "admin",
+              "owner"
             ]
           },
           "maxBatchSize": 100,
-          "allowAtomic": true
+          "allowFailFast": true
         },
         "batchUpdate": {
           "access": {
             "roles": [
-              "owner",
-              "admin"
+              "admin",
+              "owner"
             ]
           },
           "maxBatchSize": 100,
-          "allowAtomic": true
+          "allowFailFast": true
         },
         "batchDelete": {
           "access": {
@@ -494,7 +436,7 @@
           },
           "mode": "soft",
           "maxBatchSize": 100,
-          "allowAtomic": true
+          "allowFailFast": true
         }
       },
       "guards": {
@@ -522,8 +464,8 @@
           "type": "email",
           "show": {
             "roles": [
-              "owner",
-              "admin"
+              "admin",
+              "owner"
             ]
           }
         },
@@ -531,8 +473,8 @@
           "type": "phone",
           "show": {
             "roles": [
-              "owner",
-              "admin"
+              "admin",
+              "owner"
             ]
           }
         },
@@ -540,8 +482,8 @@
           "type": "redact",
           "show": {
             "roles": [
-              "owner",
-              "admin"
+              "admin",
+              "owner"
             ]
           }
         }
@@ -555,9 +497,9 @@
           ],
           "access": {
             "roles": [
-              "owner",
+              "member",
               "admin",
-              "member"
+              "owner"
             ]
           }
         },
@@ -573,8 +515,8 @@
           ],
           "access": {
             "roles": [
-              "owner",
-              "admin"
+              "admin",
+              "owner"
             ]
           }
         }
@@ -655,14 +597,14 @@
         },
         {
           "name": "salaryMin",
-          "dbName": "salaryMin",
+          "dbName": "salary_min",
           "type": "integer",
           "primaryKey": false,
           "notNull": false
         },
         {
           "name": "salaryMax",
-          "dbName": "salaryMax",
+          "dbName": "salary_max",
           "type": "integer",
           "primaryKey": false,
           "notNull": false
@@ -676,35 +618,22 @@
         },
         {
           "name": "organizationId",
-          "dbName": "organizationId",
+          "dbName": "organization_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true
         }
       ],
       "firewall": {
-        "organization": {},
-        "softDelete": {}
+        "organization": {
+          "column": "organizationId",
+          "source": "ctx.activeOrgId"
+        },
+        "softDelete": {
+          "column": "deletedAt"
+        }
       },
       "crud": {
-        "list": {
-          "access": {
-            "roles": [
-              "owner",
-              "admin",
-              "member"
-            ]
-          }
-        },
-        "get": {
-          "access": {
-            "roles": [
-              "owner",
-              "admin",
-              "member"
-            ]
-          }
-        },
         "create": {
           "access": {
             "roles": [
@@ -737,7 +666,7 @@
             ]
           },
           "maxBatchSize": 100,
-          "allowAtomic": true
+          "allowFailFast": true
         },
         "batchUpdate": {
           "access": {
@@ -747,7 +676,7 @@
             ]
           },
           "maxBatchSize": 100,
-          "allowAtomic": true
+          "allowFailFast": true
         },
         "batchDelete": {
           "access": {
@@ -757,7 +686,7 @@
           },
           "mode": "soft",
           "maxBatchSize": 100,
-          "allowAtomic": true
+          "allowFailFast": true
         }
       },
       "guards": {

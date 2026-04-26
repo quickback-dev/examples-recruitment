@@ -7,16 +7,18 @@
  */
 import { createMiddleware } from 'hono/factory';
 import { createServices, type Services } from '../lib/services';
+import type { Env } from '../lib/auth';
 
 /**
- * Services middleware - creates service instances.
+ * Services middleware - creates service instances from env bindings.
  *
  * Services are available in handlers via c.get('services').
  */
 export const servicesMiddleware = createMiddleware<{
+  Bindings: Env;
   Variables: { services: Services };
 }>(async (c, next) => {
-  const services = createServices();
+  const services = createServices(c.env);
   c.set('services', services);
   return next();
 });

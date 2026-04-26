@@ -13,22 +13,14 @@ import type { AppContext } from '../../lib/types';
 
 /**
  * Firewall conditions for applications
- * Pattern: Organization only
+ * 2 predicates
  */
-export function buildFirewallConditions(ctx: AppContext) {
-  const conditions = [];
-
-  // Organization isolation
-  conditions.push(eq(applications.organizationId, ctx.activeOrgId!));
-
-  // Soft delete filter
-  conditions.push(isNull(applications.deletedAt));
-
-  return and(...conditions);
+export function buildFirewallConditions(ctx: AppContext): SQL | undefined {
+  return and(eq(applications.organizationId, ctx.activeOrgId!), isNull(applications.deletedAt));
 }
 
 /**
- * Helper for manual routes - wraps handler with auth check and firewall
+ * Helper for manual routes — wraps handler with auth check and firewall
  */
 export async function withFirewall<T>(
   c: Context,
@@ -52,7 +44,7 @@ export const GUARDS_CONFIG = {
     status: new Set<string>(['advance', 'reject', 'hire', 'withdraw']),
   } as Record<string, Set<string>>,
   immutable: new Set<string>(['jobId', 'candidateId']),
-  systemManaged: new Set<string>(['createdAt', 'createdBy', 'modifiedAt', 'modifiedBy', 'deletedAt', 'deletedBy']),
+  systemManaged: new Set<string>(['createdAt', 'createdBy', 'modifiedAt', 'modifiedBy', 'deletedAt', 'deletedBy', 'organizationId']),
 };
 
 /**
@@ -158,24 +150,6 @@ export function validateUpdate(input: Record<string, any>): {
 
 // CRUD Access
 export const CRUD_ACCESS = {
-  "list": {
-    "access": {
-      "roles": [
-        "owner",
-        "admin",
-        "member"
-      ]
-    }
-  },
-  "get": {
-    "access": {
-      "roles": [
-        "owner",
-        "admin",
-        "member"
-      ]
-    }
-  },
   "create": {
     "access": {
       "roles": [

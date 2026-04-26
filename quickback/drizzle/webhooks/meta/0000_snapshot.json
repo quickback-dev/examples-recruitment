@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "41c16c07-9d0a-415b-863d-ea846d51dca0",
+  "id": "93bfb87b-8dd1-490c-bf82-91e67ba82205",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "webhook_deliveries": {

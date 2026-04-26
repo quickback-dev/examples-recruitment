@@ -39,7 +39,7 @@ export enum QuickbackErrorCode {
   FIREWALL_USER_ISOLATION = 'FIREWALL_USER_ISOLATION',
   FIREWALL_SOFT_DELETED = 'FIREWALL_SOFT_DELETED',
 
-  // Access Layer (403)
+  // Access Layer (403, plus 409 for state conflicts)
   ACCESS_ROLE_REQUIRED = 'ACCESS_ROLE_REQUIRED',
   ACCESS_CONDITION_FAILED = 'ACCESS_CONDITION_FAILED',
   ACCESS_OWNERSHIP_REQUIRED = 'ACCESS_OWNERSHIP_REQUIRED',
@@ -48,6 +48,7 @@ export enum QuickbackErrorCode {
   ACCESS_TENANT_SCOPE_REQUIRED = 'ACCESS_TENANT_SCOPE_REQUIRED',
   ACCESS_CROSS_TENANT_FORBIDDEN = 'ACCESS_CROSS_TENANT_FORBIDDEN',
   ACCESS_AUDIT_LOG_FAILED = 'ACCESS_AUDIT_LOG_FAILED',
+  ACCESS_ACTION_NOT_ALLOWED_FOR_STATE = 'ACCESS_ACTION_NOT_ALLOWED_FOR_STATE',
 
   // Guards Layer (400/403)
   GUARD_FIELD_PROTECTED = 'GUARD_FIELD_PROTECTED',
@@ -61,7 +62,7 @@ export enum QuickbackErrorCode {
 
   // Batch Operations (400/207)
   BATCH_SIZE_EXCEEDED = 'BATCH_SIZE_EXCEEDED',
-  BATCH_ATOMIC_FAILED = 'BATCH_ATOMIC_FAILED',
+  BATCH_FAIL_FAST_STOPPED = 'BATCH_FAIL_FAST_STOPPED',
   BATCH_MISSING_IDS = 'BATCH_MISSING_IDS',
 }
 
@@ -283,6 +284,32 @@ export const AccessErrors = {
     reason ? { reason } : undefined,
     'Check AUDIT_DB binding and audit migrations before retrying'
   ),
+
+  actionNotAllowedForState: (
+    field: string,
+    current: any,
+    target: any,
+    allowedTargets: string[],
+  ) => createError(
+    'Action not allowed for current record state',
+    'access',
+    QuickbackErrorCode.ACCESS_ACTION_NOT_ALLOWED_FOR_STATE,
+    { field, current, target, allowedTargets },
+    allowedTargets.length > 0
+      ? `From "${current}", ${field} can transition to: ${allowedTargets.join(', ')}`
+      : `No transitions are allowed from "${current}"`
+  ),
+
+  recordPreconditionFailed: (
+    actionName: string,
+    conditions: Record<string, any> | undefined,
+  ) => createError(
+    'Action not allowed for current record state',
+    'access',
+    QuickbackErrorCode.ACCESS_ACTION_NOT_ALLOWED_FOR_STATE,
+    { action: actionName, conditions },
+    'The record does not meet the preconditions declared for this action'
+  ),
 };
 
 /**
@@ -355,12 +382,14 @@ export const BatchErrors = {
     `Maximum ${max} records allowed per batch. Split into multiple requests.`
   ),
 
-  atomicFailed: (failedAt: number, reason: QuickbackError) => createError(
-    'Batch operation failed in atomic mode',
+  failFastStopped: (failedAt: number, reason: QuickbackError) => createError(
+    'Batch stopped at first error (fail-fast mode)',
     'validation',
-    QuickbackErrorCode.BATCH_ATOMIC_FAILED,
+    QuickbackErrorCode.BATCH_FAIL_FAST_STOPPED,
     { failedAt, reason: reason.error, errorDetails: reason.details },
-    'Transaction rolled back. Fix the error and retry the entire batch.'
+    `Records before index ${failedAt} were applied and are NOT rolled back. ` +
+      'Inspect application state before retrying — re-sending the same batch ' +
+      'may double-apply records that already succeeded.'
   ),
 
   missingIds: (indices: number[]) => createError(

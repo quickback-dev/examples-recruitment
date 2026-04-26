@@ -1,8 +1,7 @@
 import type { ActionExecutor } from "@quickback/types";
-import { eq } from "drizzle-orm";
 import { applications } from "../schema";
 
-export const execute: ActionExecutor = async ({ db, record, input, auditFields }) => {
+export const execute: ActionExecutor = async ({ db, record, input, auditFields, whereRecord }) => {
   const [updated] = await db
     .update(applications)
     .set({
@@ -10,7 +9,7 @@ export const execute: ActionExecutor = async ({ db, record, input, auditFields }
       notes: input.notes ?? record.notes,
       modifiedAt: auditFields.modifiedAt,
     })
-    .where(eq(applications.id, record.id))
+    .where(whereRecord!(applications))
     .returning();
   return updated;
 };

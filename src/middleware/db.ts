@@ -6,23 +6,25 @@
  * then run `quickback compile` to regenerate.
  */
 import { createMiddleware } from 'hono/factory';
-import { authDb, db } from '../db';
+import { createAuthDb, createDb, type AuthDatabase, type FeaturesDatabase } from '../db';
 import { createAuditDb } from '../lib/audit-wrapper';
+import type { Env } from '../lib/auth';
 
 /**
- * Database middleware - provides database instances
- * - authDb: Auth database (users, sessions, organizations, etc.)
- * - db: Features database (application tables)
+ * Database middleware - creates Drizzle instances from D1 bindings
+ * - authDb: Connected to AUTH_DB (users, sessions, organizations, etc.)
+ * - db: Connected to DB (application feature tables)
  * Note: db is wrapped with audit auto-injection for createdBy/modifiedBy
  */
 export const dbMiddleware = createMiddleware<{
+  Bindings: Env;
   Variables: {
-    authDb: typeof authDb;
-    db: typeof db;
+    authDb: AuthDatabase;
+    db: FeaturesDatabase;
   };
 }>(async (c, next) => {
-  c.set('authDb', authDb);
-  c.set('db', createAuditDb(db, () => (c as any).get('ctx')) as typeof db);
+  c.set('authDb', createAuthDb(c.env.AUTH_DB));
+  c.set('db', createAuditDb(createDb(c.env.DB), () => (c as any).get('ctx')) as FeaturesDatabase);
   return next();
 });
 

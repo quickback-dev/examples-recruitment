@@ -6,9 +6,9 @@
  * then run `quickback compile` to regenerate.
  */
 import { createMiddleware } from 'hono/factory';
+import { drizzle } from 'drizzle-orm/d1';
 import { eq, and } from 'drizzle-orm';
-import { auth } from '../lib/auth';
-import { authDb } from '../db';
+import { createAuth, type Env } from '../lib/auth';
 import type { AppContext } from '../lib/types';
 import { verifyJwt, signJwt } from '../lib/jwt';
 import { AuthErrors } from '../lib/errors';
@@ -18,6 +18,7 @@ import { member } from '../auth/schema';
  * Auth middleware - extracts session or API key and populates AppContext
  */
 export const authMiddleware = createMiddleware<{
+  Bindings: Env;
   Variables: { ctx: AppContext };
 }>(async (c, next) => {
   // Skip Better Auth routes - they handle their own authentication
@@ -33,16 +34,18 @@ export const authMiddleware = createMiddleware<{
   }
 
   try {
+    const auth = createAuth(c.env);
 
     // Check for API key via x-api-key header
     const apiKeyHeader = c.req.header('x-api-key');
     if (apiKeyHeader) {
       try {
-        const keyResult = await auth.api.verifyApiKey({
+        const keyResult = await (auth.api as any).verifyApiKey({
           body: { key: apiKeyHeader }
         });
 
         if (keyResult?.valid && keyResult.key) {
+          // Parse metadata to get organizationId
           const metadata = keyResult.key.metadata
             ? (typeof keyResult.key.metadata === 'string'
                 ? JSON.parse(keyResult.key.metadata)
@@ -51,10 +54,12 @@ export const authMiddleware = createMiddleware<{
 
           const activeOrgId = metadata.organizationId as string | undefined;
 
+          // Look up the user's actual role in the organization
           let roles: string[] = [];
           let verifiedOrgId = activeOrgId;
           if (activeOrgId) {
             try {
+              const authDb = drizzle(c.env.AUTH_DB);
               const [row] = await authDb
                 .select({ role: member.role })
                 .from(member)
@@ -106,7 +111,7 @@ export const authMiddleware = createMiddleware<{
     const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
     if (bearerToken?.startsWith('eyJ')) {
       try {
-        const claims = await verifyJwt(bearerToken, process.env.BETTER_AUTH_SECRET!);
+        const claims = await verifyJwt(bearerToken, c.env.BETTER_AUTH_SECRET);
         if (claims) {
           c.set('ctx', {
         authenticated: true,
@@ -133,12 +138,12 @@ export const authMiddleware = createMiddleware<{
     }
 
     // Extract organization and roles from session
-    const activeOrg = session.session.activeOrganizationId;
+    const activeOrg = (session.session as any).activeOrganizationId as string | undefined;
     const sessionMember = activeOrg
-      ? await auth.api.getFullOrganization({
+      ? await (auth.api as any).getFullOrganization({
           headers: c.req.raw.headers,
           query: { organizationId: activeOrg }
-        }).then(org => org?.members?.find(m => m.userId === session.user.id))
+        }).then((org: any) => org?.members?.find((m: any) => m.userId === session.user.id))
       : null;
     const verifiedOrgId = sessionMember && activeOrg ? activeOrg : undefined;
     const userRole = (session.user as any).role || 'user';
@@ -163,7 +168,7 @@ export const authMiddleware = createMiddleware<{
         orgId: verifiedOrgId,
         role: sessionMember?.role,
         userRole: userRole,
-      }, process.env.BETTER_AUTH_SECRET!);
+      }, c.env.BETTER_AUTH_SECRET);
       c.header('set-auth-token', jwt);
     } catch {
       // Non-fatal: session auth succeeded, JWT mint is optional

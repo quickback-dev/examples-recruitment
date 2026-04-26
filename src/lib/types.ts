@@ -34,8 +34,8 @@ export interface Services {
 export interface ActionExecutorParams<TInput = any> {
   /** Database instance (Drizzle) */
   db: any;
-  /** Raw unscoped database (only when action enables unsafe mode) */
-  rawDb?: any;
+  /** Unscoped Drizzle client — only injected when the action declares unsafe: true */
+  unsafeDb?: any;
   /** Application context (user, org, roles) */
   ctx: AppContext;
   /** Current record (for record-level actions) */
@@ -46,8 +46,16 @@ export interface ActionExecutorParams<TInput = any> {
   services: Services;
   /** Hono context for advanced use cases */
   c: Context;
+  /** Runtime bindings (Cloudflare env, etc.). Alias for c.env. */
+  env: any;
   /** Audit field helpers (createdAt, createdBy, modifiedAt, modifiedBy) */
   auditFields?: { createdAt: string; createdBy: string; modifiedAt: string; modifiedBy: string };
+  /**
+   * Build a Drizzle WHERE clause that targets the current record while AND-merging
+   * the resource's firewall + soft-delete conditions. Only present for record-based
+   * actions. Prefer this over eq(table.id, record.id) for protected-field writes.
+   */
+  whereRecord?: (table: any) => any;
 }
 
 /**

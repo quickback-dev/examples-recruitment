@@ -16,28 +16,37 @@ import { sql } from 'drizzle-orm';
  * Candidates — the people being considered for jobs.
  *
  * Exercises:
- *  - PII masking: email/phone masked for non-recruiter roles
- *  - Views: `pipeline` (lean columns for list UI) vs `full` (restricted)
- *  - Mixed `.required()` / `.optional()` chains
- *  - Org-scoped firewall with softDelete
+ *  - Column DSL: `.filterable()` / `.searchable()` opt-ins
+ *  - `q.scope("organization")` declares a tenant-scope column in one place;
+ *    the compiler auto-derives the firewall predicate AND adds it to
+ *    systemManaged guards, so the explicit `firewall: [...]` block can drop
+ *    its organization clause (soft-delete still ridges in via auto-detection
+ *    on `deletedAt`)
+ *  - PII masking with a single `query.roles` role gate that covers ?filter,
+ *    ?sort, and ?search uniformly. Non-admins see masked payloads AND can't
+ *    enumerate via query strings. The `full` view re-opens all three for
+ *    admins via its own `query.{cap}` allowlist — the validator enforces
+ *    `view.access.roles ∩ masking.query.roles ≠ ∅` before permitting the
+ *    opt-in (with `show.roles` as the fallback when `query` is omitted).
+ *  - Unified read pipeline with named views and per-view query allowlists
+ *  - `feature()` single-export sugar
  */
-
 export const candidates = sqliteTable("candidates", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   email: text("email").notNull(),
   phone: text("phone"),
-  resumeUrl: text("resumeUrl"),
+  resumeUrl: text("resume_url"),
   source: text("source", { enum: ["linkedin", "referral", "careers-page", "other"] as const }).default("other").notNull(),
-  internalNotes: text("internalNotes"),
-  organizationId: text("organizationId").notNull(),
+  internalNotes: text("internal_notes"),
+  organizationId: text("organization_id").notNull(),
 
-    createdAt: text("createdAt").notNull().default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
-    modifiedAt: text("modifiedAt").notNull().default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
-    deletedAt: text("deletedAt"),
-    createdBy: text("createdBy"),
-    modifiedBy: text("modifiedBy"),
-    deletedBy: text("deletedBy"),
+    createdAt: text("created_at").notNull().default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
+    modifiedAt: text("modified_at").notNull().default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
+    deletedAt: text("deleted_at"),
+    createdBy: text("created_by"),
+    modifiedBy: text("modified_by"),
+    deletedBy: text("deleted_by"),
   });
 
 /**

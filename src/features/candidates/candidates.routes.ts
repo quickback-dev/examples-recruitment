@@ -6,7 +6,7 @@
  * then run `quickback compile` to regenerate.
  */
 import { Hono } from 'hono';
-import { eq, and, or, gt, gte, lt, lte, ne, like, inArray, asc, desc, count, type SQL } from 'drizzle-orm';
+import { eq, and, or, gt, gte, lt, lte, ne, like, inArray, asc, desc, count, sql, type SQL } from 'drizzle-orm';
 import { candidates } from './schema';
 import type { AppContext } from '../../lib/types';
 import type { CloudflareBindings } from '../../env';
@@ -21,7 +21,7 @@ import {
   CRUD_ACCESS
 } from './candidates.resource';
 import { jsonWithEtag } from '../../lib/etag';
-import { evaluateAccess } from '../../lib/access';
+import { evaluateAccess, evaluateAccessPreRecord, evaluateAccessReason } from '../../lib/access';
 import { AuthErrors, FirewallErrors, AccessErrors, GuardErrors, BatchErrors } from '../../lib/errors';
 import { z } from 'zod';
 import { parseJsonWithSchema } from '../../lib/request-validation';
@@ -43,6 +43,13 @@ function parseFilterValue(value: string): string | number | boolean {
   return value;
 }
 
+// Escape SQL LIKE wildcards in user input. Without this, '%' or '_' in a
+// search query would change pattern semantics and let callers probe across
+// columns more aggressively than the API contract allows.
+function escapeLike(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
+}
+
 // Request body schemas — derived from the q DSL column Zods.
 const CreateBodySchema = z.object({
   name: z.string(),
@@ -51,8 +58,7 @@ const CreateBodySchema = z.object({
   resumeUrl: z.string().optional(),
   source: z.enum(["linkedin", "referral", "careers-page", "other"] as const).optional(),
   internalNotes: z.string().optional(),
-  organizationId: z.string(),
-}).passthrough();
+}).strict();
 const UpdateBodySchema = z.object({
   name: z.string().optional(),
   email: z.string().optional(),
@@ -60,419 +66,119 @@ const UpdateBodySchema = z.object({
   resumeUrl: z.string().optional(),
   source: z.enum(["linkedin", "referral", "careers-page", "other"] as const).optional(),
   internalNotes: z.string().optional(),
-  organizationId: z.string().optional(),
-}).passthrough();
-const BatchOptionsSchema = z.object({ atomic: z.boolean() }).passthrough().optional();
-const BatchCreateBodySchema = z.object({ records: z.array(CreateBodySchema), options: BatchOptionsSchema }).passthrough();
-const BatchUpdateBodySchema = z.object({ records: z.array(UpdateBodySchema), options: BatchOptionsSchema }).passthrough();
+}).strict();
+const BatchUpdateRecordSchema = z.object({
+  name: z.string().optional(),
+  email: z.string().optional(),
+  phone: z.string().optional(),
+  resumeUrl: z.string().optional(),
+  source: z.enum(["linkedin", "referral", "careers-page", "other"] as const).optional(),
+  internalNotes: z.string().optional(),
+}).extend({ id: z.string() }).strict();
+const BatchOptionsSchema = z.object({ failFast: z.boolean() }).strict().optional();
+const BatchCreateBodySchema = z.object({ records: z.array(CreateBodySchema), options: BatchOptionsSchema }).strict();
+const BatchUpdateBodySchema = z.object({ records: z.array(BatchUpdateRecordSchema), options: BatchOptionsSchema }).strict();
+const BatchDeleteBodySchema = z.object({ ids: z.array(z.string()), options: BatchOptionsSchema }).strict();
 
 const app = new Hono<{ Bindings: CloudflareBindings; Variables: { ctx: AppContext; db: any; services: any; authDb: any } }>();
 
 // ═══════════════════════════════════════════════════════
-// VIEW: GET /candidates/views/pipeline
-// Fields: id, name, source
-// Supports: ?limit=10&offset=0&sort=createdAt,-name&total=true&search=text&field=value&field.gt=100
+// READ: GET /candidates
+// Unified handler dispatched by ?view=<name>. Supports:
+//   ?limit=10&offset=0
+//   ?sort=createdAt,-name
+//   ?total=true
+//   ?fields=id,name,email           (when no view selected)
+//   ?search=text
+//   ?<field>=value | ?<field>.<op>=value
+//   ?organizationId=<orgId>         (member-of-org check; effective scope)
 // ═══════════════════════════════════════════════════════
-app.get('/views/pipeline', async (c) => {
-  const ctx = c.get('ctx');
-  const db = c.get('db');
-
-  if (!ctx.authenticated) {
-    return c.json({ error: 'Unauthorized', code: 'UNAUTHORIZED' }, 401);
-  }
-
-  // View field configuration
-  const viewFields = ["id","name","source"];
-
-  // Parse query parameters
-  const url = new URL(c.req.url);
-  const params = Object.fromEntries(url.searchParams.entries());
-
-  // Get organization ID from query param or fall back to session's active org
-  const requestedOrgId = params.organizationId || ctx.activeOrgId;
-  if (!requestedOrgId) {
-    return c.json({
-      error: 'Organization required',
-      code: 'ORG_REQUIRED',
-      hint: 'Pass organizationId query param or set active organization in session'
-    }, 400);
-  }
-
-  // Use the requested org for access checks
-  let effectiveCtx = params.organizationId ? { ...ctx, activeOrgId: requestedOrgId } : ctx;
-
-  if (params.organizationId && ctx.authenticated) {
-    if (ctx.userRole !== 'admin') {
-      const authDb = c.get('authDb');
-      if (!authDb) {
-        return c.json({
-          error: 'Auth database unavailable',
-          code: 'AUTH_DB_UNAVAILABLE',
-          hint: 'Set authDb in request context to validate organization membership'
-        }, 500);
-      }
-      const memberRole = await getOrgMemberRole(authDb, ctx.userId!, requestedOrgId);
-      if (!memberRole) {
-        return c.json(AccessErrors.roleRequired(['owner', 'admin', 'member'], ctx.roles), 403);
-      }
-      effectiveCtx = { ...effectiveCtx, roles: [memberRole] };
+const READ_ACCESS: any = {
+  "roles": [
+    "member",
+    "admin",
+    "owner"
+  ]
+};
+const VIEWS = {
+  "pipeline": {
+    "fields": [
+      "id",
+      "name",
+      "source"
+    ],
+    "access": {
+      "roles": [
+        "member",
+        "admin",
+        "owner"
+      ]
+    },
+    "query": {
+      "filterable": [
+        "source"
+      ],
+      "searchable": [
+        "name"
+      ],
+      "sortable": [
+        "createdAt",
+        "name"
+      ],
+      "defaultSort": "-createdAt"
+    }
+  },
+  "full": {
+    "fields": [
+      "id",
+      "name",
+      "email",
+      "phone",
+      "resumeUrl",
+      "source",
+      "internalNotes"
+    ],
+    "access": {
+      "roles": [
+        "admin",
+        "owner"
+      ]
+    },
+    "query": {
+      "filterable": [
+        "source",
+        "email",
+        "phone"
+      ],
+      "searchable": [
+        "name",
+        "email",
+        "internalNotes"
+      ],
+      "sortable": [
+        "createdAt",
+        "name",
+        "email"
+      ]
     }
   }
+} as const;
+const DEFAULT_VIEW = "";
+const DEFAULT_SEARCHABLE: string[] = ["name"];
+// Per-column filter parsers — generated from the q DSL column kinds so a
+// "123" passed for a TEXT column stays a string instead of being coerced to
+// a number by the generic parseFilterValue.
+const FILTER_PARSERS: Record<string, (v: string) => unknown> = {
+  "id": (v: string) => v,
+  "name": (v: string) => v,
+  "email": (v: string) => v,
+  "phone": (v: string) => v,
+  "resumeUrl": (v: string) => v,
+  "source": (v: string) => v,
+  "internalNotes": (v: string) => v,
+  "organizationId": (v: string) => v
+};
 
-  // Access check
-  if (!await evaluateAccess(VIEWS_CONFIG['pipeline'].access, effectiveCtx)) {
-    return c.json(AccessErrors.roleRequired((VIEWS_CONFIG['pipeline'].access as any).roles || [], ctx.roles), 403);
-  }
-
-  // Pagination
-  const limit = Math.min(Math.max(parseInt(params.limit) || 50, 1), 100);
-  const offset = Math.max(parseInt(params.offset) || 0, 0);
-
-  // Multi-sort: ?sort=createdAt,-name (comma-separated, - prefix = desc)
-  // Backwards compatible: ?sort=createdAt&order=desc still works
-  const sortOrders: { column: any; direction: typeof asc }[] = [];
-  const sortParam = params.sort || 'createdAt';
-  if (sortParam.includes(',') || sortParam.startsWith('-')) {
-    // New multi-sort format
-    for (const part of sortParam.split(',')) {
-      const trimmed = part.trim();
-      if (!trimmed) continue;
-      const isDesc = trimmed.startsWith('-');
-      const fieldName = isDesc ? trimmed.slice(1) : trimmed;
-      if (fieldName in candidates) {
-        const col = candidates[fieldName as keyof typeof candidates] as any;
-        if (typeof col === 'object' && col) {
-          sortOrders.push({ column: col, direction: isDesc ? desc : asc });
-        }
-      }
-    }
-  } else {
-    // Legacy single-sort format: ?sort=field&order=desc
-    const sortOrder = params.order === 'asc' ? asc : desc;
-    if (sortParam in candidates) {
-      const col = candidates[sortParam as keyof typeof candidates] as any;
-      if (typeof col === 'object' && col) {
-        sortOrders.push({ column: col, direction: sortOrder });
-      }
-    }
-  }
-
-  // Build filter conditions
-  const filterConditions: SQL[] = [];
-  const firewallCond = buildFirewallConditions(effectiveCtx);
-  if (firewallCond) filterConditions.push(firewallCond);
-
-  // Process filters and operators
-  const reservedParams = new Set(['limit', 'offset', 'sort', 'order', 'organizationId', 'search']);
-  for (const [key, value] of Object.entries(params)) {
-    if (reservedParams.has(key)) continue;
-
-    // Check for operator suffix (field.gt, field.lt, etc)
-    const [field, op] = key.split('.');
-    if (!(field in candidates)) continue;
-
-    const column = candidates[field as keyof typeof candidates] as any;
-    if (typeof column !== 'object' || !column) continue;
-
-    switch (op) {
-      case 'gt':
-        filterConditions.push(gt(column, parseFilterValue(value)));
-        break;
-      case 'gte':
-        filterConditions.push(gte(column, parseFilterValue(value)));
-        break;
-      case 'lt':
-        filterConditions.push(lt(column, parseFilterValue(value)));
-        break;
-      case 'lte':
-        filterConditions.push(lte(column, parseFilterValue(value)));
-        break;
-      case 'ne':
-        filterConditions.push(ne(column, parseFilterValue(value)));
-        break;
-      case 'like':
-        filterConditions.push(like(column, `%${value}%`));
-        break;
-      case 'in':
-        filterConditions.push(inArray(column, value.split(',')));
-        break;
-      case undefined:
-        // No operator = exact match
-        filterConditions.push(eq(column, parseFilterValue(value)));
-        break;
-    }
-  }
-
-  // Search: ?search=text (OR'd LIKE across text columns)
-  const searchableColumns = ["name","email","phone","resumeUrl","source","internalNotes"];
-  if (params.search && searchableColumns.length > 0) {
-    const searchTerm = `%${params.search}%`;
-    const searchConditions = searchableColumns
-      .filter((col: string) => col in candidates)
-      .map((col: string) => like(candidates[col as keyof typeof candidates] as any, searchTerm));
-    if (searchConditions.length > 0) {
-      filterConditions.push(or(...searchConditions)!);
-    }
-  }
-
-  // Build select object for only the view fields
-  const selectFields: Record<string, any> = {};
-  for (const field of viewFields) {
-    if (field in candidates) {
-      selectFields[field] = candidates[field as keyof typeof candidates];
-    }
-  }
-
-  // Build and execute query
-  let query = db.select(selectFields).from(candidates);
-
-  if (filterConditions.length > 0) {
-    query = query.where(and(...filterConditions));
-  }
-
-  // Apply sorting
-  if (sortOrders.length > 0) {
-    query = query.orderBy(...sortOrders.map(s => s.direction(s.column)));
-  }
-
-  // Total count (always included for pagination)
-  let countQuery = db.select({ value: count() }).from(candidates);
-  if (filterConditions.length > 0) {
-    countQuery = countQuery.where(and(...filterConditions));
-  }
-  const [countResult] = await countQuery;
-  const total = countResult?.value ?? 0;
-
-  // Apply pagination
-  query = query.limit(limit).offset(offset);
-
-  const results = await query;
-
-  // Return with pagination metadata
-  const totalPages = Math.ceil(total / limit);
-  const currentPage = Math.floor(offset / limit) + 1;
-  const pagination = {
-    total,
-    count: results.length,
-    page: currentPage,
-    pageSize: limit,
-    totalPages,
-    hasMore: currentPage < totalPages,
-  };
-
-  return jsonWithEtag(c, {
-    data: maskCandidates(results, ctx),
-    view: 'pipeline',
-    fields: viewFields,
-    pagination,
-  });
-});
-
-// ═══════════════════════════════════════════════════════
-// VIEW: GET /candidates/views/full
-// Fields: id, name, email, phone, resumeUrl, source, internalNotes
-// Supports: ?limit=10&offset=0&sort=createdAt,-name&total=true&search=text&field=value&field.gt=100
-// ═══════════════════════════════════════════════════════
-app.get('/views/full', async (c) => {
-  const ctx = c.get('ctx');
-  const db = c.get('db');
-
-  if (!ctx.authenticated) {
-    return c.json({ error: 'Unauthorized', code: 'UNAUTHORIZED' }, 401);
-  }
-
-  // View field configuration
-  const viewFields = ["id","name","email","phone","resumeUrl","source","internalNotes"];
-
-  // Parse query parameters
-  const url = new URL(c.req.url);
-  const params = Object.fromEntries(url.searchParams.entries());
-
-  // Get organization ID from query param or fall back to session's active org
-  const requestedOrgId = params.organizationId || ctx.activeOrgId;
-  if (!requestedOrgId) {
-    return c.json({
-      error: 'Organization required',
-      code: 'ORG_REQUIRED',
-      hint: 'Pass organizationId query param or set active organization in session'
-    }, 400);
-  }
-
-  // Use the requested org for access checks
-  let effectiveCtx = params.organizationId ? { ...ctx, activeOrgId: requestedOrgId } : ctx;
-
-  if (params.organizationId && ctx.authenticated) {
-    if (ctx.userRole !== 'admin') {
-      const authDb = c.get('authDb');
-      if (!authDb) {
-        return c.json({
-          error: 'Auth database unavailable',
-          code: 'AUTH_DB_UNAVAILABLE',
-          hint: 'Set authDb in request context to validate organization membership'
-        }, 500);
-      }
-      const memberRole = await getOrgMemberRole(authDb, ctx.userId!, requestedOrgId);
-      if (!memberRole) {
-        return c.json(AccessErrors.roleRequired(['owner', 'admin', 'member'], ctx.roles), 403);
-      }
-      effectiveCtx = { ...effectiveCtx, roles: [memberRole] };
-    }
-  }
-
-  // Access check
-  if (!await evaluateAccess(VIEWS_CONFIG['full'].access, effectiveCtx)) {
-    return c.json(AccessErrors.roleRequired((VIEWS_CONFIG['full'].access as any).roles || [], ctx.roles), 403);
-  }
-
-  // Pagination
-  const limit = Math.min(Math.max(parseInt(params.limit) || 50, 1), 100);
-  const offset = Math.max(parseInt(params.offset) || 0, 0);
-
-  // Multi-sort: ?sort=createdAt,-name (comma-separated, - prefix = desc)
-  // Backwards compatible: ?sort=createdAt&order=desc still works
-  const sortOrders: { column: any; direction: typeof asc }[] = [];
-  const sortParam = params.sort || 'createdAt';
-  if (sortParam.includes(',') || sortParam.startsWith('-')) {
-    // New multi-sort format
-    for (const part of sortParam.split(',')) {
-      const trimmed = part.trim();
-      if (!trimmed) continue;
-      const isDesc = trimmed.startsWith('-');
-      const fieldName = isDesc ? trimmed.slice(1) : trimmed;
-      if (fieldName in candidates) {
-        const col = candidates[fieldName as keyof typeof candidates] as any;
-        if (typeof col === 'object' && col) {
-          sortOrders.push({ column: col, direction: isDesc ? desc : asc });
-        }
-      }
-    }
-  } else {
-    // Legacy single-sort format: ?sort=field&order=desc
-    const sortOrder = params.order === 'asc' ? asc : desc;
-    if (sortParam in candidates) {
-      const col = candidates[sortParam as keyof typeof candidates] as any;
-      if (typeof col === 'object' && col) {
-        sortOrders.push({ column: col, direction: sortOrder });
-      }
-    }
-  }
-
-  // Build filter conditions
-  const filterConditions: SQL[] = [];
-  const firewallCond = buildFirewallConditions(effectiveCtx);
-  if (firewallCond) filterConditions.push(firewallCond);
-
-  // Process filters and operators
-  const reservedParams = new Set(['limit', 'offset', 'sort', 'order', 'organizationId', 'search']);
-  for (const [key, value] of Object.entries(params)) {
-    if (reservedParams.has(key)) continue;
-
-    // Check for operator suffix (field.gt, field.lt, etc)
-    const [field, op] = key.split('.');
-    if (!(field in candidates)) continue;
-
-    const column = candidates[field as keyof typeof candidates] as any;
-    if (typeof column !== 'object' || !column) continue;
-
-    switch (op) {
-      case 'gt':
-        filterConditions.push(gt(column, parseFilterValue(value)));
-        break;
-      case 'gte':
-        filterConditions.push(gte(column, parseFilterValue(value)));
-        break;
-      case 'lt':
-        filterConditions.push(lt(column, parseFilterValue(value)));
-        break;
-      case 'lte':
-        filterConditions.push(lte(column, parseFilterValue(value)));
-        break;
-      case 'ne':
-        filterConditions.push(ne(column, parseFilterValue(value)));
-        break;
-      case 'like':
-        filterConditions.push(like(column, `%${value}%`));
-        break;
-      case 'in':
-        filterConditions.push(inArray(column, value.split(',')));
-        break;
-      case undefined:
-        // No operator = exact match
-        filterConditions.push(eq(column, parseFilterValue(value)));
-        break;
-    }
-  }
-
-  // Search: ?search=text (OR'd LIKE across text columns)
-  const searchableColumns = ["name","email","phone","resumeUrl","source","internalNotes"];
-  if (params.search && searchableColumns.length > 0) {
-    const searchTerm = `%${params.search}%`;
-    const searchConditions = searchableColumns
-      .filter((col: string) => col in candidates)
-      .map((col: string) => like(candidates[col as keyof typeof candidates] as any, searchTerm));
-    if (searchConditions.length > 0) {
-      filterConditions.push(or(...searchConditions)!);
-    }
-  }
-
-  // Build select object for only the view fields
-  const selectFields: Record<string, any> = {};
-  for (const field of viewFields) {
-    if (field in candidates) {
-      selectFields[field] = candidates[field as keyof typeof candidates];
-    }
-  }
-
-  // Build and execute query
-  let query = db.select(selectFields).from(candidates);
-
-  if (filterConditions.length > 0) {
-    query = query.where(and(...filterConditions));
-  }
-
-  // Apply sorting
-  if (sortOrders.length > 0) {
-    query = query.orderBy(...sortOrders.map(s => s.direction(s.column)));
-  }
-
-  // Total count (always included for pagination)
-  let countQuery = db.select({ value: count() }).from(candidates);
-  if (filterConditions.length > 0) {
-    countQuery = countQuery.where(and(...filterConditions));
-  }
-  const [countResult] = await countQuery;
-  const total = countResult?.value ?? 0;
-
-  // Apply pagination
-  query = query.limit(limit).offset(offset);
-
-  const results = await query;
-
-  // Return with pagination metadata
-  const totalPages = Math.ceil(total / limit);
-  const currentPage = Math.floor(offset / limit) + 1;
-  const pagination = {
-    total,
-    count: results.length,
-    page: currentPage,
-    pageSize: limit,
-    totalPages,
-    hasMore: currentPage < totalPages,
-  };
-
-  return jsonWithEtag(c, {
-    data: maskCandidates(results, ctx),
-    view: 'full',
-    fields: viewFields,
-    pagination,
-  });
-});
-
-// ═══════════════════════════════════════════════════════
-// LIST: GET /candidates
-// Supports: ?limit=10&offset=0&sort=createdAt,-name&fields=id,name&total=true&search=text
-// Also supports: ?organizationId=xxx to query a specific org (user must be a member)
-// ═══════════════════════════════════════════════════════
 app.get('/', async (c) => {
   const ctx = c.get('ctx');
   const db = c.get('db');
@@ -485,7 +191,23 @@ app.get('/', async (c) => {
   const url = new URL(c.req.url);
   const params = Object.fromEntries(url.searchParams.entries());
 
-  // Get organization ID from query param or fall back to session's active org
+  // Resolve the view. Empty/missing param falls back to the configured
+  // default; if no default is configured (named views without
+  // `read.defaultView`), bare `GET /` returns VIEW_REQUIRED.
+  const viewName = (params.view || DEFAULT_VIEW) as keyof typeof VIEWS;
+  if (!viewName) {
+    return c.json({
+      error: 'View required',
+      code: 'VIEW_REQUIRED',
+      hint: `This collection requires an explicit ?view=<name>. Available views: ${Object.keys(VIEWS).join(', ')}`,
+    }, 400);
+  }
+  const view = VIEWS[viewName];
+  if (!view) {
+    return c.json({ error: 'Unknown view', code: 'VIEW_NOT_FOUND', view: params.view }, 400);
+  }
+
+  // Member-of-org check (cross-org reads via ?organizationId=...)
   const requestedOrgId = params.organizationId || ctx.activeOrgId;
   if (!requestedOrgId) {
     return c.json({
@@ -494,10 +216,7 @@ app.get('/', async (c) => {
       hint: 'Pass organizationId query param or set active organization in session'
     }, 400);
   }
-
-  // Use the requested org for access checks
   let effectiveCtx = params.organizationId ? { ...ctx, activeOrgId: requestedOrgId } : ctx;
-
   if (params.organizationId && ctx.authenticated) {
     if (ctx.userRole !== 'admin') {
       const authDb = c.get('authDb');
@@ -516,37 +235,42 @@ app.get('/', async (c) => {
     }
   }
 
-  // Access check
-  if (!await evaluateAccess(CRUD_ACCESS.list.access, effectiveCtx)) {
-    return c.json(AccessErrors.roleRequired((CRUD_ACCESS.list.access as any).roles || [], effectiveCtx.roles, (CRUD_ACCESS.list.access as any).userRole, effectiveCtx.userRole), 403);
+  // Access gate. View-level access wins over read-level access.
+  const accessConfig: any = (view as any).access ?? READ_ACCESS ?? null;
+  if (accessConfig) {
+    if (!await evaluateAccess(accessConfig, effectiveCtx)) {
+      return c.json(AccessErrors.roleRequired((accessConfig as any).roles || [], effectiveCtx.roles, (accessConfig as any).userRole, effectiveCtx.userRole), 403);
+    }
   }
 
   // Pagination
   const limit = Math.min(Math.max(parseInt(params.limit) || 50, 1), 100);
   const offset = Math.max(parseInt(params.offset) || 0, 0);
 
-  // Multi-sort: ?sort=createdAt,-name (comma-separated, - prefix = desc)
-  // Backwards compatible: ?sort=createdAt&order=desc still works
+  // Sort allowlist (per-view), with table-wide fallback when the view doesn't declare one.
+  const sortAllowlist: ReadonlySet<string> | null = (view as any).query?.sortable
+    ? new Set<string>((view as any).query.sortable)
+    : null;
   const sortOrders: { column: any; direction: typeof asc }[] = [];
-  const sortParam = params.sort || 'createdAt';
-  if (sortParam.includes(',') || sortParam.startsWith('-')) {
-    // New multi-sort format
+  const sortParam = params.sort || (view as any).query?.defaultSort || 'createdAt';
+  const isMultiSort = sortParam.includes(',') || sortParam.startsWith('-');
+  const acceptSort = (fieldName: string) =>
+    fieldName in candidates && (sortAllowlist === null || sortAllowlist.has(fieldName));
+  if (isMultiSort) {
     for (const part of sortParam.split(',')) {
       const trimmed = part.trim();
       if (!trimmed) continue;
       const isDesc = trimmed.startsWith('-');
       const fieldName = isDesc ? trimmed.slice(1) : trimmed;
-      if (fieldName in candidates) {
-        const col = candidates[fieldName as keyof typeof candidates] as any;
-        if (typeof col === 'object' && col) {
-          sortOrders.push({ column: col, direction: isDesc ? desc : asc });
-        }
+      if (!acceptSort(fieldName)) continue;
+      const col = candidates[fieldName as keyof typeof candidates] as any;
+      if (typeof col === 'object' && col) {
+        sortOrders.push({ column: col, direction: isDesc ? desc : asc });
       }
     }
   } else {
-    // Legacy single-sort format: ?sort=field&order=desc
     const sortOrder = params.order === 'asc' ? asc : desc;
-    if (sortParam in candidates) {
+    if (acceptSort(sortParam)) {
       const col = candidates[sortParam as keyof typeof candidates] as any;
       if (typeof col === 'object' && col) {
         sortOrders.push({ column: col, direction: sortOrder });
@@ -554,9 +278,17 @@ app.get('/', async (c) => {
     }
   }
 
-  // Field selection: ?fields=id,name,email
+  // Field selection. View.fields takes precedence; ?fields= is honored only
+  // when the default view is in play (no per-view projection).
   let selectFields: Record<string, any> | undefined;
-  if (params.fields) {
+  const viewFields = (view as any).fields as string[] | undefined;
+  if (viewFields && viewFields.length > 0) {
+    const projected: Record<string, any> = {};
+    for (const f of viewFields) {
+      if (f in candidates) projected[f] = candidates[f as keyof typeof candidates];
+    }
+    if (Object.keys(projected).length > 0) selectFields = projected;
+  } else if (params.fields) {
     const requested: Record<string, any> = {};
     for (const f of params.fields.split(',')) {
       const fieldName = f.trim();
@@ -564,109 +296,121 @@ app.get('/', async (c) => {
         requested[fieldName] = candidates[fieldName as keyof typeof candidates];
       }
     }
-    if (Object.keys(requested).length > 0) {
-      selectFields = requested;
-    }
+    if (Object.keys(requested).length > 0) selectFields = requested;
   }
 
-  // Build filter conditions
+  // Filter conditions. Firewall always applies first.
   const filterConditions: SQL[] = [];
   const firewallCond = buildFirewallConditions(effectiveCtx);
   if (firewallCond) filterConditions.push(firewallCond);
 
-  // Process filters and operators
-  // Note: organizationId is handled by firewall conditions when hasFirewall=true
-  const reservedParams = new Set(['limit', 'offset', 'sort', 'order', 'organizationId', 'fields', 'search']);
+  // Per-view filterable allowlist; null means "no allowlist declared, accept any column".
+  const filterAllowlist: ReadonlySet<string> | null = (view as any).query?.filterable
+    ? new Set<string>((view as any).query.filterable)
+    : null;
+  const reservedParams = new Set(['limit', 'offset', 'sort', 'order', 'organizationId', 'fields', 'search', 'view', 'total']);
   for (const [key, value] of Object.entries(params)) {
     if (reservedParams.has(key)) continue;
 
-    // Check for operator suffix (field.gt, field.lt, etc)
     const [field, op] = key.split('.');
     if (!(field in candidates)) continue;
+    if (filterAllowlist !== null && !filterAllowlist.has(field)) continue;
 
     const column = candidates[field as keyof typeof candidates] as any;
     if (typeof column !== 'object' || !column) continue;
 
+    const parseField = FILTER_PARSERS[field] ?? parseFilterValue;
+
     switch (op) {
       case 'gt':
-        filterConditions.push(gt(column, parseFilterValue(value)));
+        filterConditions.push(gt(column, parseField(value)));
         break;
       case 'gte':
-        filterConditions.push(gte(column, parseFilterValue(value)));
+        filterConditions.push(gte(column, parseField(value)));
         break;
       case 'lt':
-        filterConditions.push(lt(column, parseFilterValue(value)));
+        filterConditions.push(lt(column, parseField(value)));
         break;
       case 'lte':
-        filterConditions.push(lte(column, parseFilterValue(value)));
+        filterConditions.push(lte(column, parseField(value)));
         break;
       case 'ne':
-        filterConditions.push(ne(column, parseFilterValue(value)));
+        filterConditions.push(ne(column, parseField(value)));
         break;
       case 'like':
-        filterConditions.push(like(column, `%${value}%`));
+        // ESCAPE '\' is required — SQLite has no default escape character,
+        // and Postgres in standard_conforming_strings mode also requires the
+        // explicit clause. Without it, escapeLike()'s '\%' / '\_' output is
+        // re-interpreted as wildcard, defeating the escape entirely.
+        filterConditions.push(sql`${column} LIKE ${`%${escapeLike(value)}%`} ESCAPE '\\'`);
         break;
       case 'in':
-        filterConditions.push(inArray(column, value.split(',')));
+        filterConditions.push(inArray(column, value.split(',').map((v) => parseField(v))));
         break;
       case undefined:
-        // No operator = exact match
-        filterConditions.push(eq(column, parseFilterValue(value)));
+        filterConditions.push(eq(column, parseField(value)));
         break;
     }
   }
 
-  // Search: ?search=text (OR'd LIKE across text columns)
-  const searchableColumns = ["name","email","phone","resumeUrl","source","internalNotes"];
+  // Search: ?search=text, OR'd LIKE across the per-view searchable allowlist.
+  // Each branch carries an ESCAPE '\' clause — see the like-case above for
+  // why it matters.
+  const searchableColumns: string[] = (view as any).query?.searchable ?? DEFAULT_SEARCHABLE;
   if (params.search && searchableColumns.length > 0) {
-    const searchTerm = `%${params.search}%`;
+    const searchTerm = `%${escapeLike(params.search)}%`;
     const searchConditions = searchableColumns
       .filter((col: string) => col in candidates)
-      .map((col: string) => like(candidates[col as keyof typeof candidates] as any, searchTerm));
+      .map((col: string) => sql`${candidates[col as keyof typeof candidates] as any} LIKE ${searchTerm} ESCAPE '\\'`);
     if (searchConditions.length > 0) {
       filterConditions.push(or(...searchConditions)!);
     }
   }
 
-  // Build and execute query
+  // Build & execute query.
   let query = selectFields ? db.select(selectFields).from(candidates) : db.select().from(candidates);
-
   if (filterConditions.length > 0) {
     query = query.where(and(...filterConditions));
   }
-
-  // Apply sorting
   if (sortOrders.length > 0) {
     query = query.orderBy(...sortOrders.map(s => s.direction(s.column)));
   }
 
-  // Total count (always included for pagination)
-  let countQuery = db.select({ value: count() }).from(candidates);
-  if (filterConditions.length > 0) {
-    countQuery = countQuery.where(and(...filterConditions));
+  // Total count is opt-in via ?total=true to keep hot reads cheap.
+  let total: number | null = null;
+  if (params.total === 'true') {
+    let countQuery = db.select({ value: count() }).from(candidates);
+    if (filterConditions.length > 0) {
+      countQuery = countQuery.where(and(...filterConditions));
+    }
+    const [countResult] = await countQuery;
+    total = countResult?.value ?? 0;
   }
-  const [countResult] = await countQuery;
-  const total = countResult?.value ?? 0;
 
-  // Apply pagination
   query = query.limit(limit).offset(offset);
-
   const results = await query;
 
-  // Return with pagination metadata
-  const totalPages = Math.ceil(total / limit);
-  const currentPage = Math.floor(offset / limit) + 1;
-  const pagination = {
-    total,
-    count: results.length,
-    page: currentPage,
-    pageSize: limit,
-    totalPages,
-    hasMore: currentPage < totalPages,
-  };
+  // Pagination metadata. When ?total=true was passed we report counted totals;
+  // otherwise we report a hasMore signal computed from the page size.
+  const pagination = total !== null
+    ? {
+        total,
+        count: results.length,
+        page: Math.floor(offset / limit) + 1,
+        pageSize: limit,
+        totalPages: Math.ceil(total / limit),
+        hasMore: (Math.floor(offset / limit) + 1) < Math.ceil(total / limit),
+      }
+    : {
+        count: results.length,
+        page: Math.floor(offset / limit) + 1,
+        pageSize: limit,
+        hasMore: results.length === limit,
+      };
 
   return jsonWithEtag(c, {
-    data: maskCandidates(results, ctx),
+    data: maskCandidates(results, effectiveCtx),
+    view: viewName === '__default' ? null : viewName,
     pagination,
   });
 });
@@ -678,9 +422,16 @@ app.post('/batch', async (c) => {
   const ctx = c.get('ctx');
   const db = c.get('db');
 
-  // Access check
-  const batchCreateAccess = {"roles":["owner","admin"]};
-  if (!await evaluateAccess(batchCreateAccess, ctx)) {
+  // Universal auth gate. Even if the access check below is missing or
+  // buggy, unauthenticated callers cannot reach the batch insert. PUBLIC
+  // opt-in would be expressed via an explicit access config.
+  if (!ctx.authenticated) {
+    return c.json({ error: 'Unauthorized', code: 'UNAUTHORIZED' }, 401);
+  }
+
+  // Pre-query access check
+  const batchCreateAccess = {"roles":["admin","owner"]};
+  if (!await evaluateAccessPreRecord(batchCreateAccess, ctx)) {
     return c.json(AccessErrors.roleRequired((batchCreateAccess as any).roles || [], ctx.roles), 403);
   }
 
@@ -698,7 +449,7 @@ const parseResult = await parseJsonWithSchema(c.req.raw, BatchCreateBodySchema);
   const body = parseResult.data as any;
   const records = body.records || [];
   const options = body.options || {};
-  const atomic = options.atomic === true;
+  const failFast = options.failFast === true;
 
   // Validate batch size
   if (records.length > 100) {
@@ -710,12 +461,16 @@ const parseResult = await parseJsonWithSchema(c.req.raw, BatchCreateBodySchema);
     return c.json({
       success: [],
       errors: [],
-      meta: { total: 0, succeeded: 0, failed: 0, atomic: false }
+      meta: { total: 0, succeeded: 0, failed: 0, failFast: false }
     }, 200);
   }
 
   const now = new Date().toISOString();
-  const validRecords: any[] = [];
+  // Track the original input index alongside each post-guards record so that
+  // a downstream insert failure can attribute its errors to the right input
+  // index — the bulk insert path doesn't know which post-validation slot
+  // corresponds to which caller-supplied record otherwise.
+  const validRecords: { originalIndex: number; data: any }[] = [];
   const errors: any[] = [];
 
   // Process each record
@@ -741,7 +496,7 @@ const parseResult = await parseJsonWithSchema(c.req.raw, BatchCreateBodySchema);
 
     // Apply defaults, ownership, computed fields, and audit fields
     const data = {
-      id: crypto.randomUUID(),
+      id: 'cnd_' + crypto.randomUUID().replace(/-/g, ''),
       ...record,
       ...{},
     organizationId: ctx.activeOrgId,
@@ -749,12 +504,14 @@ const parseResult = await parseJsonWithSchema(c.req.raw, BatchCreateBodySchema);
     modifiedAt: now,
     };
 
-    validRecords.push(data);
+    validRecords.push({ originalIndex: i, data });
   }
 
-  // If atomic mode and any errors, fail the entire batch
-  if (atomic && errors.length > 0) {
-    return c.json(BatchErrors.atomicFailed(errors[0].index, errors[0].error), 400);
+  // Fail-fast mode: if any guards rejected a record, stop here. NOTE: this
+  // is fail-fast, not transactional rollback — earlier records that pass
+  // guards are still inserted by the bulk write below if we proceed.
+  if (failFast && errors.length > 0) {
+    return c.json(BatchErrors.failFastStopped(errors[0].index, errors[0].error), 400);
   }
 
   let success: any[] = [];
@@ -762,7 +519,7 @@ const parseResult = await parseJsonWithSchema(c.req.raw, BatchCreateBodySchema);
   // Execute bulk insert if we have valid records
   if (validRecords.length > 0) {
     try {
-      success = await db.insert(candidates).values(validRecords).returning();
+      success = await db.insert(candidates).values(validRecords.map((v) => v.data)).returning();
     } catch (error: any) {
       // Search full error chain (D1/Drizzle may nest the real error in cause)
       const errMsg = [error?.message, error?.cause?.message, String(error)].filter(Boolean).join(' ');
@@ -771,17 +528,17 @@ const parseResult = await parseJsonWithSchema(c.req.raw, BatchCreateBodySchema);
       const code = isNotNull ? 'NOT_NULL_VIOLATION' : isUnique ? 'UNIQUE_VIOLATION' : 'INSERT_FAILED';
       const label = isNotNull ? 'Missing required field' : isUnique ? 'Duplicate value' : 'Database insert failed';
 
-      if (atomic) {
+      if (failFast) {
         return c.json({
           error: label,
           layer: 'database',
           code: 'BATCH_' + code,
         }, 400);
       }
-      for (let i = 0; i < validRecords.length; i++) {
+      for (const v of validRecords) {
         errors.push({
-          index: i,
-          record: records[i],
+          index: v.originalIndex,
+          record: records[v.originalIndex],
           error: { error: label, layer: 'database', code }
         });
       }
@@ -791,11 +548,14 @@ const parseResult = await parseJsonWithSchema(c.req.raw, BatchCreateBodySchema);
   // Apply masking to success array
   const maskedSuccess = maskCandidates(success, ctx);
 
+  // Bulk INSERT is a single SQL statement, atomic at the DB level — either
+  // every record is inserted or none is. No tx wrapper needed.
   const meta = {
     total: records.length,
     succeeded: success.length,
     failed: errors.length,
-    atomic
+    failFast,
+    transactional: true
   };
 
   const statusCode = errors.length > 0 ? 207 : 201;
@@ -813,6 +573,12 @@ app.patch('/batch', async (c) => {
     return c.json({ error: 'Unauthorized', code: 'UNAUTHORIZED' }, 401);
   }
 
+  // Pre-query access check (role gate only)
+  const batchUpdateAccess = {"roles":["admin","owner"]};
+  if (!await evaluateAccessPreRecord(batchUpdateAccess, ctx)) {
+    return c.json(AccessErrors.roleRequired((batchUpdateAccess as any).roles || [], ctx.roles, (batchUpdateAccess as any).userRole, ctx.userRole), 403);
+  }
+
   const parseResult = await parseJsonWithSchema(c.req.raw, BatchUpdateBodySchema);
   if (!parseResult.ok) {
     return c.json({ error: parseResult.error, code: parseResult.code, layer: 'validation', fields: parseResult.fields }, 400);
@@ -820,7 +586,7 @@ app.patch('/batch', async (c) => {
   const body = parseResult.data as any;
   const records = body.records || [];
   const options = body.options || {};
-  const atomic = options.atomic === true;
+  const failFast = options.failFast === true;
 
   // Validate batch size
   if (records.length > 100) {
@@ -832,7 +598,7 @@ app.patch('/batch', async (c) => {
     return c.json({
       success: [],
       errors: [],
-      meta: { total: 0, succeeded: 0, failed: 0, atomic: false }
+      meta: { total: 0, succeeded: 0, failed: 0, failFast: false }
     }, 200);
   }
 
@@ -864,33 +630,44 @@ app.patch('/batch', async (c) => {
   const errors: any[] = [];
   const success: any[] = [];
   const ownershipFields = ["organizationId"];
+  let failFastIndex = -1;
+  let failFastError: any = null;
 
-  // Process each record
-  for (let i = 0; i < records.length; i++) {
-    const record = records[i];
-    const existingRecord = recordMap.get(record.id);
+  // Per-record loop, accepts a db OR tx handle so the tx-wrapping branch
+  // below can replay the same body inside a transaction. Throws on the
+  // first DB error when failFast=true so the tx aborts and rolls back.
+  const processBatch = async (handle: any) => {
+    for (let i = 0; i < records.length; i++) {
+      const record = records[i];
+      // Split id off the patch payload up front. `record` keeps the full
+      // shape for error reporting and the firewall write clause; `patch`
+      // is what reaches validateUpdate and the SET clause — id is the
+      // WHERE-clause identifier, not a writable column, so it has no
+      // business in either.
+      const { id: _id, ...patch } = record;
+      const existingRecord = recordMap.get(record.id);
 
-    // Check if record exists
-    if (!existingRecord) {
-      errors.push({
-        index: i,
-        record,
-        error: { ...FirewallErrors.notFound(), details: { id: record.id } }
-      });
-      continue;
-    }
+      // Check if record exists
+      if (!existingRecord) {
+        errors.push({
+          index: i,
+          record,
+          error: { ...FirewallErrors.notFound(), details: { id: record.id } }
+        });
+        continue;
+      }
 
         // Default: Authenticated access required
-    if (!ctx.authenticated) {
-      errors.push({
-        index: i,
-        record,
-        error: { error: 'Unauthorized', code: 'UNAUTHORIZED' }
-      });
-      continue;
-    }
+      if (!ctx.authenticated) {
+        errors.push({
+          index: i,
+          record,
+          error: { error: 'Unauthorized', code: 'UNAUTHORIZED' }
+        });
+        continue;
+      }
 
-
+  
       // Block ownership scope reassignment (system-managed by auth context)
       const attemptedOwnershipFields = ownershipFields.filter((field) => Object.prototype.hasOwnProperty.call(record, field));
       if (attemptedOwnershipFields.length > 0) {
@@ -901,8 +678,10 @@ app.patch('/batch', async (c) => {
         });
         continue;
       }
-      // Guards validation
-      const validation = validateUpdate(record);
+        // Guards validation. Run against `patch` (id stripped) so the
+      // record's id field — which carries through from the request body so
+      // we can WHERE on it — doesn't get rejected as not-updatable.
+      const validation = validateUpdate(patch);
       if (!validation.valid) {
         // Prioritize error type: system-managed > immutable > protected > not updatable
         let error: any;
@@ -920,39 +699,52 @@ app.patch('/batch', async (c) => {
         continue;
       }
 
-    // Apply audit fields
-    const data = {
-      ...record,
+      // Apply audit fields. Use the id-stripped `patch` so we don't
+      // emit UPDATE x SET id = $1 — the WHERE clause already pins the row.
+      const data = {
+        ...patch,
     modifiedAt: new Date().toISOString(),
-    };
+      };
 
-    // Execute update
-    try {
-      const result = await db.update(candidates)
-        .set(data)
-        .where(and(buildFirewallConditions(ctx), eq(candidates.id, record.id)))
-        .returning();
+      // Execute update
+      try {
+        const result = await handle.update(candidates)
+          .set(data)
+          .where(and(buildFirewallConditions(ctx), eq(candidates.id, record.id)))
+          .returning();
 
-      if (result[0]) {
-        success.push(result[0]);
-      }
-    } catch (error: any) {
-      const errMsg = [error?.message, error?.cause?.message, String(error)].filter(Boolean).join(' ');
-      const isNotNull = errMsg.includes('NOT NULL constraint failed');
-      const isUnique = errMsg.includes('UNIQUE constraint failed');
-      const code = isNotNull ? 'NOT_NULL_VIOLATION' : isUnique ? 'UNIQUE_VIOLATION' : 'UPDATE_FAILED';
-      const label = isNotNull ? 'Missing required field' : isUnique ? 'Duplicate value' : 'Update failed';
-      errors.push({
-        index: i,
-        record,
-        error: { error: label, layer: 'database', code }
-      });
+        if (result[0]) {
+          success.push(result[0]);
+        }
+      } catch (error: any) {
+        const errMsg = [error?.message, error?.cause?.message, String(error)].filter(Boolean).join(' ');
+        const isNotNull = errMsg.includes('NOT NULL constraint failed');
+        const isUnique = errMsg.includes('UNIQUE constraint failed');
+        const code = isNotNull ? 'NOT_NULL_VIOLATION' : isUnique ? 'UNIQUE_VIOLATION' : 'UPDATE_FAILED';
+        const label = isNotNull ? 'Missing required field' : isUnique ? 'Duplicate value' : 'Update failed';
+        errors.push({
+          index: i,
+          record,
+          error: { error: label, layer: 'database', code }
+        });
 
-      // In atomic mode, fail fast
-      if (atomic) {
-        return c.json(BatchErrors.atomicFailed(i, errors[errors.length - 1].error), 400);
+        if (failFast) {
+          // Stop on first DB error. The outer tx wrapper (if any) will
+          // catch the throw and roll back; on D1 the throw is caught by
+          // the outer try and the partially-committed records remain.
+          failFastIndex = i;
+          failFastError = errors[errors.length - 1].error;
+          throw error;
+        }
       }
     }
+  };
+
+  let transactional = false;
+  try {
+    await processBatch(db);
+  } catch (err) {
+    return c.json(BatchErrors.failFastStopped(failFastIndex, failFastError), 400);
   }
 
   // Apply masking to success array
@@ -962,7 +754,8 @@ app.patch('/batch', async (c) => {
     total: records.length,
     succeeded: success.length,
     failed: errors.length,
-    atomic
+    failFast,
+    transactional
   };
 
   const statusCode = errors.length > 0 ? 207 : 200;
@@ -980,10 +773,20 @@ app.delete('/batch', async (c) => {
     return c.json({ error: 'Unauthorized', code: 'UNAUTHORIZED' }, 401);
   }
 
-  const body = await c.req.json();
+  // Pre-query access check (role gate only)
+  const batchDeleteAccess = {"roles":["owner"]};
+  if (!await evaluateAccessPreRecord(batchDeleteAccess, ctx)) {
+    return c.json(AccessErrors.roleRequired((batchDeleteAccess as any).roles || [], ctx.roles, (batchDeleteAccess as any).userRole, ctx.userRole), 403);
+  }
+
+  const parseResult = await parseJsonWithSchema(c.req.raw, BatchDeleteBodySchema);
+  if (!parseResult.ok) {
+    return c.json({ error: parseResult.error, code: parseResult.code, layer: 'validation', fields: parseResult.fields }, 400);
+  }
+  const body = parseResult.data as any;
   const ids = body.ids || [];
   const options = body.options || {};
-  const atomic = options.atomic === true;
+  const failFast = options.failFast === true;
 
   // Validate batch size
   if (ids.length > 100) {
@@ -995,7 +798,7 @@ app.delete('/batch', async (c) => {
     return c.json({
       success: [],
       errors: [],
-      meta: { total: 0, succeeded: 0, failed: 0, atomic: false }
+      meta: { total: 0, succeeded: 0, failed: 0, failFast: false }
     }, 200);
   }
 
@@ -1010,6 +813,11 @@ app.delete('/batch', async (c) => {
   }
 
   const errors: any[] = [];
+  // Track each id alongside its original input index so that a downstream
+  // bulk-delete failure can attribute its errors back to ids[i] in the
+  // request body (records that fail the existence / access gate above
+  // already get the right index from the loop counter).
+  const validEntries: Array<{ id: string; originalIndex: number }> = [];
   const validIds: string[] = [];
 
   // Process each ID
@@ -1038,11 +846,13 @@ app.delete('/batch', async (c) => {
     }
 
     validIds.push(id);
+    validEntries.push({ id, originalIndex: i });
   }
 
-  // If atomic mode and any errors, fail the entire batch
-  if (atomic && errors.length > 0) {
-    return c.json(BatchErrors.atomicFailed(errors[0].index, errors[0].error), 400);
+  // Fail-fast mode: stop on first existence/access error. Earlier deletes
+  // executed by a previous request remain — this is fail-fast, not rollback.
+  if (failFast && errors.length > 0) {
+    return c.json(BatchErrors.failFastStopped(errors[0].index, errors[0].error), 400);
   }
 
   let success: any[] = [];
@@ -1061,7 +871,7 @@ app.delete('/batch', async (c) => {
         success = result;
       } catch (error: any) {
         // Database error during delete
-        if (atomic) {
+        if (failFast) {
           return c.json({
             error: 'Batch delete failed',
             layer: 'validation',
@@ -1069,11 +879,14 @@ app.delete('/batch', async (c) => {
             details: { reason: error.message }
           }, 400);
         }
-        // In partial success mode, treat all as errors
-        for (let i = 0; i < validIds.length; i++) {
+        // In partial success mode, fan the database error out to each id
+        // that made it past the existence/access gate. Use the original
+        // input index (tracked alongside the id) so the response matches
+        // ids[i] in the request body.
+        for (const v of validEntries) {
           errors.push({
-            index: i,
-            id: validIds[i],
+            index: v.originalIndex,
+            id: v.id,
             error: {
               error: 'Database delete failed',
               layer: 'validation',
@@ -1085,11 +898,16 @@ app.delete('/batch', async (c) => {
       }
     }
 
+  // Bulk DELETE / UPDATE is a single SQL statement, atomic at the DB level —
+  // either every validId is deleted or none is. The pre-bulk validation
+  // errors don't touch the DB, so the write step is transactional regardless
+  // of provider (including D1).
   const meta = {
     total: ids.length,
     succeeded: success.length,
     failed: errors.length,
-    atomic
+    failFast,
+    transactional: true
   };
 
   const statusCode = errors.length > 0 ? 207 : 200;
@@ -1099,6 +917,8 @@ app.delete('/batch', async (c) => {
 // ═══════════════════════════════════════════════════════
 // GET: GET /candidates/:id
 // Supports: ?fields=id,name,email
+// Order: 1. auth gate → 2. pre-query access (role-only) →
+//        3. firewall query → 4. post-query access (record-aware) → 5. masking
 // ═══════════════════════════════════════════════════════
 app.get('/:id', async (c) => {
   const ctx = c.get('ctx');
@@ -1107,6 +927,12 @@ app.get('/:id', async (c) => {
 
   if (!ctx.authenticated) {
     return c.json({ error: 'Unauthorized', code: 'UNAUTHORIZED' }, 401);
+  }
+
+  // Pre-query access check (role gate only)
+  const getAccess = {"roles":["member","admin","owner"]};
+  if (!await evaluateAccessPreRecord(getAccess, ctx)) {
+    return c.json(AccessErrors.roleRequired((getAccess as any).roles || [], ctx.roles, (getAccess as any).userRole, ctx.userRole), 403);
   }
 
   // Field selection: ?fields=id,name,email
@@ -1135,8 +961,9 @@ app.get('/:id', async (c) => {
   }
 
   // Access check
-  if (!await evaluateAccess(CRUD_ACCESS.get.access, ctx)) {
-    return c.json(AccessErrors.roleRequired((CRUD_ACCESS.get.access as any).roles || [], ctx.roles, (CRUD_ACCESS.get.access as any).userRole, ctx.userRole), 403);
+  const getAccessFull = {"roles":["member","admin","owner"]};
+  if (!await evaluateAccess(getAccessFull, ctx)) {
+    return c.json(AccessErrors.roleRequired((getAccessFull as any).roles || [], ctx.roles, (getAccessFull as any).userRole, ctx.userRole), 403);
   }
 
   // Apply masking
@@ -1149,6 +976,10 @@ app.get('/:id', async (c) => {
 app.post('/', async (c) => {
   const ctx = c.get('ctx');
   const db = c.get('db');
+
+  if (!ctx.authenticated) {
+    return c.json({ error: 'Unauthorized', code: 'UNAUTHORIZED' }, 401);
+  }
 
   // Access check
   if (!await evaluateAccess(CRUD_ACCESS.create.access, ctx)) {
@@ -1187,7 +1018,7 @@ const parseResult = await parseJsonWithSchema(c.req.raw, CreateBodySchema);
   // Apply defaults, ownership, and audit fields
   const now = new Date().toISOString();
   const data = {
-    id: crypto.randomUUID(),
+    id: 'cnd_' + crypto.randomUUID().replace(/-/g, ''),
     ...body,
     ...{},
     organizationId: ctx.activeOrgId,
@@ -1234,6 +1065,8 @@ const parseResult = await parseJsonWithSchema(c.req.raw, CreateBodySchema);
 
 // ═══════════════════════════════════════════════════════
 // UPDATE: PATCH /candidates/:id
+// Order: 1. auth gate → 2. pre-query access (role-only) → 3. firewall query
+//        → 4. post-query access (record-aware) → 5. guards → 6. update → 7. masking
 // ═══════════════════════════════════════════════════════
 app.patch('/:id', async (c) => {
   const ctx = c.get('ctx');
@@ -1242,6 +1075,11 @@ app.patch('/:id', async (c) => {
 
   if (!ctx.authenticated) {
     return c.json({ error: 'Unauthorized', code: 'UNAUTHORIZED' }, 401);
+  }
+
+  // Pre-query access check (role gate only — closes 404 vs 403 ID probes)
+  if (!await evaluateAccessPreRecord(CRUD_ACCESS.update.access, ctx)) {
+    return c.json(AccessErrors.roleRequired((CRUD_ACCESS.update.access as any).roles || [], ctx.roles, (CRUD_ACCESS.update.access as any).userRole, ctx.userRole), 403);
   }
 
   // Fetch with firewall
@@ -1335,6 +1173,8 @@ app.patch('/:id', async (c) => {
 
 // ═══════════════════════════════════════════════════════
 // DELETE: DELETE /candidates/:id
+// Order: 1. auth gate → 2. pre-query access (role-only) →
+//        3. firewall query → 4. post-query access (record-aware) → 5. delete
 // ═══════════════════════════════════════════════════════
 app.delete('/:id', async (c) => {
   const ctx = c.get('ctx');
@@ -1343,6 +1183,11 @@ app.delete('/:id', async (c) => {
 
   if (!ctx.authenticated) {
     return c.json({ error: 'Unauthorized', code: 'UNAUTHORIZED' }, 401);
+  }
+
+  // Pre-query access check (role gate only — closes 404 vs 403 ID probes)
+  if (!await evaluateAccessPreRecord(CRUD_ACCESS.delete.access, ctx)) {
+    return c.json(AccessErrors.roleRequired((CRUD_ACCESS.delete.access as any).roles || [], ctx.roles, (CRUD_ACCESS.delete.access as any).userRole, ctx.userRole), 403);
   }
 
   // Fetch with firewall

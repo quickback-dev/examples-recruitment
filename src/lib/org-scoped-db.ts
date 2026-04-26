@@ -13,7 +13,7 @@
  * tables without it pass through unmodified.
  *
  * Usage:
- *   const db = createOrgScopedDb(rawDb, ctx.activeOrgId!);
+ *   const db = createOrgScopedDb(unsafeDb, ctx.activeOrgId!);
  *   // All queries now auto-filter by organizationId
  *   await db.select().from(claims).where(eq(claims.status, 'active'));
  *   // → WHERE status = 'active' AND organizationId = ?

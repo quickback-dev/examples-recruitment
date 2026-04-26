@@ -3,12 +3,16 @@
  * applications record. The resource's `guards.protected.status` lists these
  * action names, so direct PATCH attempts on `status` are rejected.
  *
- * Each action uses `access.record` to gate on the *current* status — you
- * can't advance an already-rejected application, etc. The guard layer
- * handles the role check; the record-condition handles the state check.
+ * Each action declares a `transition` policy that compiles into a runtime
+ * state-machine guard in the generated route. The guard checks both the
+ * current value of `status` *and* the target the action is about to write,
+ * so invalid jumps (`applied → offer`) and regressions (`interview → screening`)
+ * fail with **409 ACCESS_ACTION_NOT_ALLOWED_FOR_STATE** before the handler
+ * runs. Role failures stay **403 ACCESS_ROLE_REQUIRED** — the two are split
+ * so callers can tell "wrong role" from "wrong state".
  *
- * Handlers live in `./handlers/<name>.ts` and are wired via `handler:`.
- * The compiler preserves handler-file imports across recompiles (inline
+ * Handlers live in `./handlers/<name>.ts` and are wired via `handler:`. The
+ * compiler preserves handler-file imports across recompiles (inline
  * `execute: async (...)` bodies are stripped to placeholders in the
  * generated `actions.ts` — only the `handler:` path survives).
  */
@@ -23,11 +27,15 @@ export default defineActions(applications, {
       nextStatus: z.enum(["screening", "interview", "offer"]),
       notes: z.string().optional(),
     }),
-    access: {
-      roles: ["owner", "admin"],
-      // Can only advance from an earlier open state. `hired`, `rejected`, and
-      // `withdrawn` are terminal — use dedicated actions if reopening.
-      record: { status: { in: ["applied", "screening", "interview"] } },
+    access: { roles: ["owner", "admin"] },
+    transition: {
+      field: "status",
+      via: "nextStatus",
+      fromTo: {
+        applied:   ["screening"],
+        screening: ["interview"],
+        interview: ["offer"],
+      },
     },
     handler: "./handlers/advance",
   },
@@ -35,9 +43,11 @@ export default defineActions(applications, {
   hire: {
     description: "Finalize an offer — the candidate accepted.",
     input: z.object({}),
-    access: {
-      roles: ["owner"],
-      record: { status: { equals: "offer" } },
+    access: { roles: ["owner"] },
+    transition: {
+      field: "status",
+      to: "hired",
+      fromTo: { offer: ["hired"] },
     },
     handler: "./handlers/hire",
   },
@@ -47,10 +57,16 @@ export default defineActions(applications, {
     input: z.object({
       reason: z.string().optional(),
     }),
-    access: {
-      roles: ["owner", "admin"],
-      // Cannot reject someone already hired or who withdrew.
-      record: { status: { notIn: ["hired", "withdrawn"] } },
+    access: { roles: ["owner", "admin"] },
+    transition: {
+      field: "status",
+      to: "rejected",
+      fromTo: {
+        applied:   ["rejected"],
+        screening: ["rejected"],
+        interview: ["rejected"],
+        offer:     ["rejected"],
+      },
     },
     handler: "./handlers/reject",
   },
@@ -58,9 +74,16 @@ export default defineActions(applications, {
   withdraw: {
     description: "Candidate withdrew their application.",
     input: z.object({}),
-    access: {
-      roles: ["owner", "admin", "member"],
-      record: { status: { notIn: ["hired", "rejected", "withdrawn"] } },
+    access: { roles: ["owner", "admin", "member"] },
+    transition: {
+      field: "status",
+      to: "withdrawn",
+      fromTo: {
+        applied:   ["withdrawn"],
+        screening: ["withdrawn"],
+        interview: ["withdrawn"],
+        offer:     ["withdrawn"],
+      },
     },
     handler: "./handlers/withdraw",
   },

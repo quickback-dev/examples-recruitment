@@ -52,6 +52,96 @@ export async function evaluateAccess<TRecord = any>(
   return evaluateDeclarativeAccess(access, ctx, record);
 }
 
+/**
+ * Pre-query access check: evaluates role/userRole gates only and skips
+ * `access.record` predicates. Returns true when there's no record-independent
+ * way to reject the caller — used before a firewall query to fail fast on
+ * role-only mismatches without leaking record existence (404 vs 403 probe).
+ *
+ * Function-form access is opaque to the pre-record phase, so it returns true
+ * here and is fully evaluated post-record by `evaluateAccess`.
+ */
+export async function evaluateAccessPreRecord<TRecord = any>(
+  access: Access<TRecord>,
+  ctx: AppContext
+): Promise<boolean> {
+  if (typeof access === 'function') return true;
+  return evaluateDeclarativeAccessPreRecord(access, ctx);
+}
+
+function evaluateDeclarativeAccessPreRecord(
+  access: DeclarativeAccess,
+  ctx: AppContext
+): boolean {
+  if (access.or) {
+    return access.or.some(a => evaluateDeclarativeAccessPreRecord(a, ctx));
+  }
+  if (access.and) {
+    return access.and.every(a => evaluateDeclarativeAccessPreRecord(a, ctx));
+  }
+  if (access.roles?.includes('PUBLIC')) return true;
+  const rolesPassed = access.roles && access.roles.length > 0
+    ? ctx.roles?.some(r => access.roles!.includes(r)) ?? false
+    : true;
+  const userRolePassed = access.userRole && access.userRole.length > 0
+    ? !!ctx.userRole && access.userRole.includes(ctx.userRole)
+    : true;
+  return rolesPassed && userRolePassed;
+}
+
+/**
+ * Tagged access result. `null` = passed.
+ * Used to split role failures (403 ROLE_REQUIRED) from record-precondition
+ * failures (409 ACTION_NOT_ALLOWED_FOR_STATE) on record-action routes.
+ */
+export type AccessFailureReason = 'role' | 'userRole' | 'record' | null;
+
+export async function evaluateAccessReason<TRecord = any>(
+  access: Access<TRecord>,
+  ctx: AppContext,
+  record?: TRecord
+): Promise<AccessFailureReason> {
+  if (typeof access === 'function') {
+    const ok = await access(ctx, record);
+    return ok ? null : 'record';
+  }
+  return evaluateDeclarativeAccessReason(access, ctx, record);
+}
+
+function evaluateDeclarativeAccessReason<TRecord>(
+  access: DeclarativeAccess,
+  ctx: AppContext,
+  record?: TRecord
+): AccessFailureReason {
+  if (access.or) {
+    let lastReason: AccessFailureReason = 'role';
+    for (const sub of access.or) {
+      const r = evaluateDeclarativeAccessReason(sub, ctx, record);
+      if (r === null) return null;
+      if (r === 'record' || (r === 'userRole' && lastReason === 'role')) lastReason = r;
+    }
+    return lastReason;
+  }
+  if (access.and) {
+    for (const sub of access.and) {
+      const r = evaluateDeclarativeAccessReason(sub, ctx, record);
+      if (r !== null) return r;
+    }
+    return null;
+  }
+  if (access.roles?.includes('PUBLIC')) return null;
+  const rolesPassed = access.roles && access.roles.length > 0
+    ? ctx.roles?.some(r => access.roles!.includes(r)) ?? false
+    : true;
+  if (!rolesPassed) return 'role';
+  const userRolePassed = access.userRole && access.userRole.length > 0
+    ? !!ctx.userRole && access.userRole.includes(ctx.userRole)
+    : true;
+  if (!userRolePassed) return 'userRole';
+  if (access.record && !evaluateRecordConditions(access.record, record, ctx)) return 'record';
+  return null;
+}
+
 function evaluateDeclarativeAccess<TRecord>(
   access: DeclarativeAccess,
   ctx: AppContext,

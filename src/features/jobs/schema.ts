@@ -15,30 +15,29 @@ import { sql } from 'drizzle-orm';
 /**
  * Jobs — the open positions in a hiring pipeline.
  *
- * Authored entirely with the `q` DSL. Exercises:
+ * Authored with the `feature()` single-export sugar. Exercises:
  *  - `q.id()` primary key (cuid2)
  *  - `q.enum()` for a small status vocabulary
  *  - `.default(v)` combined with `.required()`
  *  - Column-level `.index()` on status (common filter)
  *  - Org-scoped firewall with softDelete
  */
-
 export const jobs = sqliteTable("jobs", {
   id: text("id").primaryKey(),
   title: text("title").notNull(),
   department: text("department").notNull(),
   status: text("status", { enum: ["draft", "open", "closed"] as const }).default("draft").notNull(),
-  salaryMin: integer("salaryMin"),
-  salaryMax: integer("salaryMax"),
+  salaryMin: integer("salary_min"),
+  salaryMax: integer("salary_max"),
   description: text("description"),
-  organizationId: text("organizationId").notNull(),
+  organizationId: text("organization_id").notNull(),
 
-    createdAt: text("createdAt").notNull().default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
-    modifiedAt: text("modifiedAt").notNull().default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
-    deletedAt: text("deletedAt"),
-    createdBy: text("createdBy"),
-    modifiedBy: text("modifiedBy"),
-    deletedBy: text("deletedBy"),
+    createdAt: text("created_at").notNull().default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
+    modifiedAt: text("modified_at").notNull().default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
+    deletedAt: text("deleted_at"),
+    createdBy: text("created_by"),
+    modifiedBy: text("modified_by"),
+    deletedBy: text("deleted_by"),
   }, (t) => ({
   jobs_status_idx: index("jobs_status_idx").on(t.status),
 }));

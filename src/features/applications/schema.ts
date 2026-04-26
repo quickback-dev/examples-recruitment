@@ -22,27 +22,27 @@ import { candidates } from "../candidates/schema";
  *  - Status column that's *protected* — only specific actions can mutate it
  *  - `references` mapping so the CMS resolves FK labels in list/get
  *  - Multi-scope WHERE: firewall.organization + softDelete
+ *  - Authored with `feature()` single-export sugar
  *
  * Status lifecycle — `applied → screening → interview → offer → hired`, or
  * any state → `rejected` / `withdrawn`. Transitions are enforced by the
  * actions in `actions.ts`; clients can't set `status` directly via PATCH.
  */
-
 export const applications = sqliteTable("applications", {
   id: text("id").primaryKey(),
-  jobId: text("jobId").notNull().references(() => jobs.id, { onDelete: "cascade" }),
-  candidateId: text("candidateId").notNull().references(() => candidates.id, { onDelete: "cascade" }),
+  jobId: text("job_id").notNull().references(() => jobs.id, { onDelete: "cascade" }),
+  candidateId: text("candidate_id").notNull().references(() => candidates.id, { onDelete: "cascade" }),
   status: text("status", { enum: ["applied", "screening", "interview", "offer", "hired", "rejected", "withdrawn"] as const }).default("applied").notNull(),
-  appliedAt: text("appliedAt"),
+  appliedAt: text("applied_at"),
   notes: text("notes"),
-  organizationId: text("organizationId").notNull(),
+  organizationId: text("organization_id").notNull(),
 
-    createdAt: text("createdAt").notNull().default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
-    modifiedAt: text("modifiedAt").notNull().default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
-    deletedAt: text("deletedAt"),
-    createdBy: text("createdBy"),
-    modifiedBy: text("modifiedBy"),
-    deletedBy: text("deletedBy"),
+    createdAt: text("created_at").notNull().default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
+    modifiedAt: text("modified_at").notNull().default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
+    deletedAt: text("deleted_at"),
+    createdBy: text("created_by"),
+    modifiedBy: text("modified_by"),
+    deletedBy: text("deleted_by"),
   }, (t) => ({
   applications_status_idx: index("applications_status_idx").on(t.status),
 }));

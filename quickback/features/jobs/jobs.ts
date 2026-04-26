@@ -21,14 +21,13 @@ export default feature("jobs", {
     description:    q.text().optional(),
     organizationId: q.text().required(),
   },
-  firewall: { organization: {}, softDelete: {} },
+  firewall: [{ field: 'organizationId', equals: 'ctx.activeOrgId' }, { field: 'deletedAt', isNull: true }],
   guards: {
     createable: ["title", "department", "status", "salaryMin", "salaryMax", "description"],
     updatable:  ["title", "department", "status", "salaryMin", "salaryMax", "description"],
   },
+  read: { access: { roles: ["owner", "admin", "member"] } },
   crud: {
-    list:   { access: { roles: ["owner", "admin", "member"] } },
-    get:    { access: { roles: ["owner", "admin", "member"] } },
     create: { access: { roles: ["owner", "admin"] } },
     update: { access: { roles: ["owner", "admin"] } },
     delete: { access: { roles: ["owner"] }, mode: "soft" },
