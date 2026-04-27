@@ -124,9 +124,14 @@ export default defineConfig({
   },
 
   // Embedded SPAs — both ride on the unified workers.dev origin:
-  //   /cms/*      → packages/cms (CMS data UI, gated to authenticated users)
+  //   /cms/*      → packages/cms (CMS data UI, gated to platform admins)
   //   /account/*  → packages/account (login/profile/orgs)
   // Built into the worker bundle at compile time; zero extra deploys.
+  //
+  // CMS defaults to `access: 'admin'` — only `user.role === 'admin'` (the
+  // Better Auth platform-admin tier, distinct from the per-org `admin`
+  // role) can reach /cms/*. Non-admins are redirected to /account/profile.
+  // Pass `cms: { access: 'user' }` to allow any authenticated user.
   cms: true,
   account: true,
 
