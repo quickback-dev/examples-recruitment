@@ -87,7 +87,7 @@ export type WebhookMessage = InboundWebhookMessage | OutboundWebhookMessage;
 
 const app = new Hono<{
   Bindings: CloudflareBindings;
-  Variables: { ctx: AppContext; authDb: any };
+  Variables: { ctx: AppContext; authDb: any; requestId: string };
 }>();
 
 // ═══════════════════════════════════════════════════════════════════
@@ -131,8 +131,9 @@ async function requireOrgMember(c: any, organizationId: string, requiredRoles?: 
 function isAllowedWebhookUrl(urlStr: string): boolean {
   try {
     const parsed = new URL(urlStr);
-    // Must be HTTPS in production
-    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return false;
+    // Default policy is https-only. Insecure http: is gated by the
+    // `webhooks.allowInsecure` compiler config (off by default).
+    if (parsed.protocol !== "https:") return false;
     const hostname = parsed.hostname.toLowerCase();
     // Block localhost and loopback
     if (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "[::1]") return false;
@@ -163,10 +164,16 @@ async function assertEndpointAccess(c: any, endpoint: any) {
     if (!check.ok) return check.response;
     return null;
   }
-  if (endpoint.userId && endpoint.userId !== ctx.userId && ctx.userRole !== "admin") {
-    return c.json({ error: "Forbidden" }, 403);
+  if (endpoint.userId) {
+    if (endpoint.userId !== ctx.userId && ctx.userRole !== "admin") {
+      return c.json({ error: "Forbidden" }, 403);
+    }
+    return null;
   }
-  return null;
+  // No scope at all — refuse by default. Endpoints today always have a scope
+  // set on create (organizationId or userId), but a future migration that
+  // dropped that invariant would otherwise fall through and silently allow.
+  return c.json({ error: "Forbidden" }, 403);
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -217,36 +224,33 @@ app.post("/inbound/:provider", async (c) => {
   // Create database connection
   const db = createWebhooksDb(c.env.WEBHOOKS_DB);
 
-  // Check for duplicate (idempotency)
-  if (event.externalId) {
-    const [existing] = await db
-      .select()
-      .from(webhookEvents)
-      .where(
-        and(
-          eq(webhookEvents.provider, providerName),
-          eq(webhookEvents.externalId, event.externalId)
-        )
-      )
-      .limit(1);
-
-    if (existing) {
-      return c.json({ received: true, duplicate: true });
-    }
-  }
-
   // Generate event ID
   const eventId = `whe_${crypto.randomUUID().replace(/-/g, "")}`;
 
-  // Log event to database
-  await db.insert(webhookEvents).values({
-    id: eventId,
-    provider: providerName,
-    eventType: event.type,
-    externalId: event.externalId,
-    payload,
-    status: "received",
-  });
+  // Idempotency: insert collapses on the unique (provider, externalId) index.
+  // If a concurrent delivery already inserted the same external event, the
+  // ON CONFLICT DO NOTHING returns no row and we short-circuit before
+  // enqueueing — handlers run exactly once per externalId.
+  // Events with NULL externalId are not subject to dedup (SQLite treats
+  // NULL as distinct in unique indexes).
+  const [inserted] = await db
+    .insert(webhookEvents)
+    .values({
+      id: eventId,
+      provider: providerName,
+      eventType: event.type,
+      externalId: event.externalId,
+      payload,
+      status: "received",
+    })
+    .onConflictDoNothing({
+      target: [webhookEvents.provider, webhookEvents.externalId],
+    })
+    .returning({ id: webhookEvents.id });
+
+  if (!inserted) {
+    return c.json({ received: true, duplicate: true });
+  }
 
   // Queue for processing
   const message: InboundWebhookMessage = {
@@ -712,6 +716,11 @@ app.post("/endpoints/:id/test", async (c) => {
   try {
     const response = await fetch(endpoint.url, {
       method: "POST",
+      // SSRF: refuse to follow redirects so a registered HTTPS endpoint can't
+      // 302 the signed test payload into an internal address. We mirror the
+      // queued delivery path's behavior (see below) and surface a 3xx as a
+      // failed test rather than transparently following it.
+      redirect: "manual",
       headers: {
         "Content-Type": "application/json",
         "X-Webhook-Signature": signature,
@@ -719,6 +728,15 @@ app.post("/endpoints/:id/test", async (c) => {
       },
       body: testPayload,
     });
+
+    if (response.status >= 300 && response.status < 400) {
+      return c.json({
+        success: false,
+        status: response.status,
+        statusText: response.statusText,
+        error: "Endpoint responded with a redirect; webhooks won't follow redirects to internal addresses.",
+      });
+    }
 
     return c.json({
       success: response.ok,
@@ -912,6 +930,10 @@ async function handleOutboundMessage(
   try {
     const response = await fetch(endpoint.url, {
       method: "POST",
+      // SSRF: refuse to follow redirects so a public endpoint can't bounce
+      // a signed payload into an internal address. 3xx is treated as a
+      // terminal delivery failure (no retry) below.
+      redirect: "manual",
       headers: {
         "Content-Type": "application/json",
         "X-Webhook-Signature": signature,
@@ -920,6 +942,22 @@ async function handleOutboundMessage(
       },
       body: payload,
     });
+
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get("location") || "<unknown>";
+      await db
+        .update(webhookDeliveries)
+        .set({
+          status: "failed",
+          attempts,
+          lastAttemptAt: now,
+          nextRetryAt: null,
+          responseStatus: response.status,
+          responseBody: `Refused to follow redirect to ${location}`.slice(0, 1000),
+        })
+        .where(eq(webhookDeliveries.id, deliveryId));
+      return;
+    }
 
     const responseBody = await response.text().catch(() => "");
 

@@ -49,6 +49,7 @@ export enum QuickbackErrorCode {
   ACCESS_CROSS_TENANT_FORBIDDEN = 'ACCESS_CROSS_TENANT_FORBIDDEN',
   ACCESS_AUDIT_LOG_FAILED = 'ACCESS_AUDIT_LOG_FAILED',
   ACCESS_ACTION_NOT_ALLOWED_FOR_STATE = 'ACCESS_ACTION_NOT_ALLOWED_FOR_STATE',
+  ACCESS_TRANSITION_LOST = 'ACCESS_TRANSITION_LOST',
 
   // Guards Layer (400/403)
   GUARD_FIELD_PROTECTED = 'GUARD_FIELD_PROTECTED',
@@ -309,6 +310,25 @@ export const AccessErrors = {
     QuickbackErrorCode.ACCESS_ACTION_NOT_ALLOWED_FOR_STATE,
     { action: actionName, conditions },
     'The record does not meet the preconditions declared for this action'
+  ),
+
+  /**
+   * Returned with HTTP 409 when a record-action's transition validator
+   * passed at read-time but the canonical state UPDATE returned zero rows
+   * because a concurrent action moved the field first. Distinct from the
+   * stale-state precondition (actionNotAllowedForState) — that one fires
+   * before the write; this one fires when the write itself was lost.
+   */
+  transitionLost: (
+    field: string,
+    expectedFrom: string,
+    attemptedTo: string,
+  ) => createError(
+    'Transition lost — record state changed before this action could write',
+    'access',
+    QuickbackErrorCode.ACCESS_TRANSITION_LOST,
+    { field, expectedFrom, attemptedTo },
+    'A concurrent action moved the record out of the expected from-state. Re-fetch and retry if appropriate.'
   ),
 };
 

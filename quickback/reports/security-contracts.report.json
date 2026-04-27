@@ -1,8 +1,8 @@
 {
   "schemaVersion": "1",
   "kind": "quickback-security-contract-report",
-  "compilerVersion": "0.10.0",
-  "generatedAt": "2026-04-26T17:17:59.815Z",
+  "compilerVersion": "0.10.3",
+  "generatedAt": "2026-04-27T17:41:03.379Z",
   "failMode": "error",
   "contractsEnabled": true,
   "destinationConfig": {
@@ -31,7 +31,7 @@
       "rls": 0
     },
     "filesChecked": {
-      "hono": 3,
+      "hono": 8,
       "rls": 0
     }
   },

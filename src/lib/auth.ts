@@ -17,7 +17,7 @@ import * as schema from "../auth/schema";
 
 // Uses AUTH_DB binding (dedicated auth database)
 
-export const TRUSTED_ORIGINS = ["http://localhost:8787"] as const;
+export const TRUSTED_ORIGINS = ["http://localhost:8787","http://localhost:3000","http://localhost:5173"] as const;
 
 // Single auth configuration that handles both CLI and runtime scenarios
 function createAuth(env?: CloudflareBindings, cf?: IncomingRequestCfProperties) {
@@ -39,13 +39,22 @@ function createAuth(env?: CloudflareBindings, cf?: IncomingRequestCfProperties) 
               const realtimeUrl = env?.REALTIME_URL;
               const accessToken = env?.ACCESS_TOKEN;
               if (!realtimeUrl || !accessToken || !member?.organizationId) return;
+              const controller = new AbortController();
+              const timeout = setTimeout(() => controller.abort(), 2500);
               try {
                 await fetch(`${realtimeUrl}/realtime/v1/api/broadcast?organizationId=${member.organizationId}`, {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json', 'X-Internal-Call': '1', 'X-Internal-Secret': accessToken },
                   body: JSON.stringify({ type: 'broadcast', event: 'auth:token-invalidated', payload: { reason: 'role-changed' }, organizationId: member.organizationId, userId: member.userId }),
+                  signal: controller.signal,
                 });
-              } catch {}
+              } catch {
+                // Best-effort invalidation — AbortError on timeout, network errors, etc.
+                // The role change itself has already committed; downstream JWTs will
+                // expire on their own TTL.
+              } finally {
+                clearTimeout(timeout);
+              }
             },
           } }), bearer(), jwt(), admin(), apiKey({
           enableMetadata: true,
@@ -59,7 +68,15 @@ function createAuth(env?: CloudflareBindings, cf?: IncomingRequestCfProperties) 
         rateLimit: {
                 enabled: true,
                 window: 60,
-                max: 100
+                max: 100,
+                customRules: {
+                  "/sign-in/email": { window: 60, max: 5 },
+                  "/sign-in/email-otp": { window: 60, max: 5 },
+                  "/email-otp/send": { window: 60, max: 3 },
+                  "/email-otp/verify": { window: 60, max: 5 },
+                  "/forget-password": { window: 60, max: 3 },
+                  "/reset-password": { window: 60, max: 5 }
+                }
             },
         session: {
                 expiresIn: 7 * 24 * 60 * 60,

@@ -38,7 +38,7 @@ export async function withFirewall<T>(
  * Guards configuration for field modification rules
  */
 export const GUARDS_CONFIG = {
-  createable: new Set<string>(['jobId', 'candidateId', 'notes', 'appliedAt']),
+  createable: new Set<string>(['jobId', 'candidateId', 'notes']),
   updatable: new Set<string>(['notes']),
   protected: {
     status: new Set<string>(['advance', 'reject', 'hire', 'withdraw']),

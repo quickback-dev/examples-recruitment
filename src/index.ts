@@ -16,7 +16,12 @@ import type { Services } from './lib/services';
 import { signJwt } from './lib/jwt';
 import { mountMcp } from './routes/mcp';
 import applicationsRoutes from './routes/applications';
+import jobPostingsRoutes from './routes/job-postings';
+import atsImportsRoutes from './routes/ats-imports';
+import customViewRoutes from './routes/custom-view';
 import candidatesRoutes from './routes/candidates';
+import interviewsRoutes from './routes/interviews';
+import reportsRoutes from './routes/reports';
 import jobsRoutes from './routes/jobs';
 
 
@@ -38,6 +43,7 @@ export const app = new Hono<{
     ctx: AppContext;
     db: any;
     services: Services;
+    requestId: string;
   };
 }>();
 
@@ -45,15 +51,47 @@ export const app = new Hono<{
 // Global Middleware
 // ═══════════════════════════════════════════════════════════════════
 
+/**
+ * Origin allowlist check used by both cors() and the auth-handler raw
+ * Response patch. TRUSTED_ORIGINS is the compile-time allowlist
+ * (localhost dev defaults + anything the project declared); a deployed
+ * worker also auto-trusts its own BETTER_AUTH_URL so prod requests from
+ * the configured base origin are accepted without an explicit
+ * trustedOrigins entry.
+ */
+function isTrustedOrigin(origin: string, c: { env?: any } | undefined): boolean {
+  if (TRUSTED_ORIGINS.includes(origin as (typeof TRUSTED_ORIGINS)[number])) return true;
+  const baseUrl: string | undefined = c?.env?.BETTER_AUTH_URL;
+  if (baseUrl && origin === baseUrl) return true;
+  return false;
+}
+
 // CORS - must be first
 app.use('*', cors({
-  origin: (origin) => {
+  origin: (origin, c) => {
     if (!origin) return undefined;
-    return TRUSTED_ORIGINS.includes(origin as (typeof TRUSTED_ORIGINS)[number]) ? origin : undefined;
+    return isTrustedOrigin(origin, c) ? origin : undefined;
   },
   credentials: true,
-  exposeHeaders: ['set-auth-token', 'ETag'],
+  exposeHeaders: ['set-auth-token', 'ETag', 'x-request-id'],
 }));
+
+// Request ID — accept an inbound `x-request-id` (lets reverse proxies /
+// upstream services thread their correlation IDs through) or mint a new
+// uuid. Exposed via ctx.get('requestId') for downstream handlers and
+// echoed on the `x-request-id` response header so callers can correlate
+// request → log → 500 body.
+app.use('*', async (c, next) => {
+  const inbound = c.req.header('x-request-id');
+  // Light validation: accept inbound IDs that look safe to log (alnum +
+  // - / _, capped at 64 chars). Anything else gets a fresh uuid so a
+  // hostile header can't poison logs with shell escapes / newlines.
+  const safeInbound = inbound && /^[A-Za-z0-9_-]{1,64}$/.test(inbound) ? inbound : null;
+  const requestId = safeInbound ?? crypto.randomUUID();
+  c.set('requestId', requestId);
+  c.header('x-request-id', requestId);
+  await next();
+});
 
 // Database middleware - sets up D1 connection
 app.use('*', dbMiddleware);
@@ -64,10 +102,26 @@ app.use('*', authMiddleware);
 // Services middleware - creates service integrations
 app.use('*', servicesMiddleware);
 
-// Global error handler
+// Global error handler — logs with the request ID for log↔response
+// correlation, and includes the same ID in the 500 body so an oncall
+// engineer with the response can find the matching log line. Stack
+// traces stay server-side.
 app.onError((err, c) => {
-  console.error('[ERROR] Unhandled:', err instanceof Error ? err.message : 'unknown error');
-  return c.json({ error: 'Internal server error' }, 500);
+  const requestId = c.get('requestId') ?? 'unknown';
+  const message = err instanceof Error ? err.message : 'unknown error';
+  console.error(JSON.stringify({
+    level: 'error',
+    requestId,
+    method: c.req.method,
+    path: new URL(c.req.url).pathname,
+    message,
+    stack: err instanceof Error ? err.stack : undefined,
+  }));
+  return c.json({
+    error: 'Internal server error',
+    code: 'INTERNAL_SERVER_ERROR',
+    requestId,
+  }, 500);
 });
 
 // Security headers middleware
@@ -160,9 +214,14 @@ app.all('/auth/v1/*', async (c) => {
     const auth = createAuth(c.env);
     const response = await auth.handler(c.req.raw);
 
-    // Patch CORS headers onto raw Response (bypasses Hono middleware)
+    // Better Auth's handler returns a fresh Response. Returning it from
+    // a Hono route replaces Hono's c.res wholesale, which throws away
+    // the Access-Control-Allow-* headers the global cors() middleware
+    // already wrote — so we copy the headers onto the new Response here.
+    // Routes through isTrustedOrigin to stay in sync with cors() above
+    // (including the runtime BETTER_AUTH_URL auto-trust).
     const origin = c.req.header('Origin');
-    if (origin && TRUSTED_ORIGINS.includes(origin as (typeof TRUSTED_ORIGINS)[number])) {
+    if (origin && isTrustedOrigin(origin, c)) {
       const patched = new Response(response.body, response);
       patched.headers.set('Access-Control-Allow-Origin', origin);
       patched.headers.set('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
@@ -218,6 +277,9 @@ app.route('/webhooks/v1', webhookRoutes);
 app.get('/api/v1/schema', authMiddleware, (c) => c.json(schemaRegistry));
 // OpenAPI spec
 app.get('/openapi.json', (c) => c.json(openapiSpec));
+
+// API browser (Scalar) — loads from CDN, points at /openapi.json
+app.get('/docs', (c) => c.html("<!doctype html>\n<html>\n  <head>\n    <title>API Reference</title>\n    <meta charset=\"utf-8\" />\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />\n  </head>\n  <body>\n    <script id=\"api-reference\" data-url=\"/openapi.json\"></script>\n    <script src=\"https://cdn.jsdelivr.net/npm/@scalar/api-reference\"></script>\n  </body>\n</html>"));
 // ═══════════════════════════════════════════════════════════════════
 // Agent Discovery Routes (robots.txt, llms.txt, /.well-known/*)
 // ═══════════════════════════════════════════════════════════════════
@@ -229,7 +291,7 @@ app.get('/robots.txt', (c) => {
 
 app.get('/llms.txt', (c) => {
   c.header('Content-Type', 'text/plain; charset=utf-8');
-  return c.body("# q-recruit\n\n> q-recruit is a Quickback-compiled API. This file gives AI agents a quick tour; the machine-readable contract is at `/openapi.json`.\n\n## Discovery\n\n- `GET /openapi.json` — full OpenAPI 3.1 spec\n- `POST /mcp` — MCP (Model Context Protocol) server — one tool per OpenAPI operation, Bearer JWT auth forwarded.\n- `GET /.well-known/mcp.json` — MCP server card\n- `GET /.well-known/api-catalog` — RFC 9727 catalog pointing at the spec\n- `GET /.well-known/oauth-protected-resource` — RFC 9728 OAuth metadata\n- `GET /.well-known/oauth-authorization-server` — RFC 8414 authorization-server metadata\n- `GET /robots.txt` — crawling policy\n- `GET /llms.txt` — this file\n\n## Authentication\n\nAll `/api/v1/*` routes require a Bearer JWT:\n\n```\nAuthorization: Bearer <jwt>\n```\n\nMint a JWT from an authenticated session:\n\n- `POST /api/v1/token` — exchanges a valid Better Auth session for a JWT\n\nSign-in endpoints (Better Auth):\n\n- `POST /auth/v1/sign-in/email` — email + password\n- `POST /auth/v1/sign-in/email-otp` — email one-time code\n- `GET  /auth/v1/sign-in/:provider` — OAuth (Google, GitHub, …) when configured\n\n## Resources\n\nEvery resource exposes the standard CRUD surface:\n\n```\nGET    /api/v1/{resource}              list\nGET    /api/v1/{resource}/{id}         get\nPOST   /api/v1/{resource}              create\nPATCH  /api/v1/{resource}/{id}         update\nDELETE /api/v1/{resource}/{id}         delete\nPOST   /api/v1/{resource}/batch        batch create  (max 100)\nPATCH  /api/v1/{resource}/batch        batch update\nDELETE /api/v1/{resource}/batch        batch delete\nGET    /api/v1/{resource}/views/{view} view  (named field projection)\n```\n\nCustom actions live at `POST /api/v1/{resource}/{actionName}`.\n\n### Resources in this API\n\n- `applications` — `GET /api/v1/applications` and CRUD siblings\n- `candidates` — `GET /api/v1/candidates` and CRUD siblings\n- `jobs` — `GET /api/v1/jobs` and CRUD siblings\n\n## Conventions\n\n- Request & response bodies are JSON.\n- List endpoints accept `?limit=`, `?offset=`, `?orderBy=`, `?filter[field]=` query params.\n- Errors follow `{ error: { code, message, layer } }` where `layer` is one of `firewall | access | guards | masking | validation`.\n- `ETag` / `If-None-Match` on GET responses.\n\n## Learn more\n\n- Machine-readable spec: `/openapi.json`\n- Quickback docs: https://docs.quickback.dev\n");
+  return c.body("# quickback-example-recruitment\n\n> quickback-example-recruitment is a Quickback-compiled API. This file gives AI agents a quick tour; the machine-readable contract is at `/openapi.json`.\n\n## Discovery\n\n- `GET /openapi.json` — full OpenAPI 3.1 spec\n- `POST /mcp` — MCP (Model Context Protocol) server — one tool per OpenAPI operation, Bearer JWT auth forwarded.\n- `GET /.well-known/mcp.json` — MCP server card\n- `GET /.well-known/api-catalog` — RFC 9727 catalog pointing at the spec\n- `GET /.well-known/oauth-protected-resource` — RFC 9728 OAuth metadata\n- `GET /.well-known/oauth-authorization-server` — RFC 8414 authorization-server metadata\n- `GET /robots.txt` — crawling policy\n- `GET /llms.txt` — this file\n\n## Authentication\n\nAll `/api/v1/*` routes require a Bearer JWT:\n\n```\nAuthorization: Bearer <jwt>\n```\n\nMint a JWT from an authenticated session:\n\n- `POST /api/v1/token` — exchanges a valid Better Auth session for a JWT\n\nSign-in endpoints (Better Auth):\n\n- `POST /auth/v1/sign-in/email` — email + password\n- `POST /auth/v1/sign-in/email-otp` — email one-time code\n- `GET  /auth/v1/sign-in/:provider` — OAuth (Google, GitHub, …) when configured\n- Account UI at `/account/*` (self-service sign-in, passkeys, organizations)\n\n## Resources\n\nEvery resource exposes the standard CRUD surface:\n\n```\nGET    /api/v1/{resource}              list\nGET    /api/v1/{resource}/{id}         get\nPOST   /api/v1/{resource}              create\nPATCH  /api/v1/{resource}/{id}         update\nDELETE /api/v1/{resource}/{id}         delete\nPOST   /api/v1/{resource}/batch        batch create  (max 100)\nPATCH  /api/v1/{resource}/batch        batch update\nDELETE /api/v1/{resource}/batch        batch delete\nGET    /api/v1/{resource}/views/{view} view  (named field projection)\n```\n\nCustom actions live at `POST /api/v1/{resource}/{actionName}`.\n\n### Resources in this API\n\n- `applications` — `GET /api/v1/applications` and CRUD siblings\n- `ats-imports` — `GET /api/v1/ats-imports` and CRUD siblings\n- `candidates` — `GET /api/v1/candidates` and CRUD siblings\n- `interviews` — `GET /api/v1/interviews` and CRUD siblings\n- `job-postings` — `GET /api/v1/job-postings` and CRUD siblings\n- `jobs` — `GET /api/v1/jobs` and CRUD siblings\n- `reports` — `GET /api/v1/reports` and CRUD siblings\n- `custom-view` — `GET /api/v1/custom-view` and CRUD siblings\n\n## Conventions\n\n- Request & response bodies are JSON.\n- List endpoints accept `?limit=`, `?offset=`, `?orderBy=`, `?filter[field]=` query params.\n- Errors follow `{ error: { code, message, layer } }` where `layer` is one of `firewall | access | guards | masking | validation`.\n- `ETag` / `If-None-Match` on GET responses.\n\n## Learn more\n\n- Machine-readable spec: `/openapi.json`\n- Quickback docs: https://docs.quickback.dev\n");
 });
 
 app.get('/.well-known/oauth-protected-resource', (c) => {
@@ -244,14 +306,19 @@ app.get('/.well-known/oauth-protected-resource', (c) => {
 });
 
 app.get('/.well-known/oauth-authorization-server', (c) => {
+  // Truthful subset of RFC 8414 metadata. We don't implement an RFC 6749
+  // grant flow — /api/v1/token mints a JWT bound to an existing session,
+  // and /auth/v1/sign-in/email is Better Auth's email sign-in (not an
+  // RFC 6749 authorization endpoint). Advertising password /
+  // authorization_code grants here would lie to discovery clients and
+  // make them fail confusingly. RFC 8414 permits omitting fields when
+  // not applicable; we keep only the locations that actually exist and
+  // point agents at /llms.txt for the real flow.
   const origin = new URL(c.req.url).origin;
   return c.json({
     issuer: origin,
     authorization_endpoint: origin + '/auth/v1/sign-in/email',
     token_endpoint: origin + '/api/v1/token',
-    token_endpoint_auth_methods_supported: ['client_secret_post'],
-    grant_types_supported: ['authorization_code', 'password'],
-    response_types_supported: ['code'],
     scopes_supported: ['read', 'write'],
     service_documentation: origin + '/llms.txt',
   });
@@ -273,20 +340,81 @@ app.get('/.well-known/api-catalog', (c) => {
 
 mountMcp(app);
 
+// CMS SPA route (unified domain)
+app.get('/cms/*', async (c) => {
+  const path = new URL(c.req.url).pathname;
+  // Serve static assets (JS, CSS, images, fonts, etc.)
+  if (path.match(/\.[a-zA-Z0-9]+$/) && !path.endsWith('.html')) {
+    const asset = await c.env.ASSETS.fetch(new Request(new URL(path, c.req.url)));
+    if (asset.ok) return asset;
+  }
+  // SPA fallback — all routes get index.html for client-side routing
+  return c.env.ASSETS.fetch(new Request(new URL('/cms/index.html', c.req.url)));
+});
+
+// Redirect root to CMS (only on unified/CMS domains, not account/admin domains)
+app.get('/', (c) => {
+  const hostname = new URL(c.req.url).hostname;
+  return c.redirect('/cms/');
+});
+// Account SPA fallback
+app.get('/account/*', async (c) => {
+  const path = new URL(c.req.url).pathname;
+  // Serve static assets (JS, CSS, images, fonts, etc.)
+  if (path.match(/\.[a-zA-Z0-9]+$/) && !path.endsWith('.html')) {
+    const asset = await c.env.ASSETS.fetch(new Request(new URL(path, c.req.url)));
+    if (asset.ok) return asset;
+  }
+  // SPA fallback — all routes get index.html for client-side routing
+  return c.env.ASSETS.fetch(new Request(new URL('/account/index.html', c.req.url)));
+});
 // ═══════════════════════════════════════════════════════════════════
 // Feature Routes
 // ═══════════════════════════════════════════════════════════════════
 
 app.route('/api/v1/applications', applicationsRoutes);
+app.route('/api/v1/job-postings', jobPostingsRoutes);
+app.route('/api/v1/ats-imports', atsImportsRoutes);
+app.route('/api/v1/custom-view', customViewRoutes);
 app.route('/api/v1/candidates', candidatesRoutes);
+app.route('/api/v1/interviews', interviewsRoutes);
+app.route('/api/v1/reports', reportsRoutes);
 app.route('/api/v1/jobs', jobsRoutes);
 
+
+let __envChecked = false;
+function __assertEnv(env: Env): { ok: true } | { ok: false; missing: string[] } {
+  if (__envChecked) return { ok: true };
+  const missing: string[] = [];
+  if (!(env as any)?.BETTER_AUTH_SECRET) missing.push('BETTER_AUTH_SECRET');
+  if (missing.length === 0) {
+    __envChecked = true;
+    return { ok: true };
+  }
+  return { ok: false, missing };
+}
+function __envFailureResponse(missing: string[]): Response {
+  console.error('[boot] Refusing to serve — missing required environment variables:', missing);
+  return new Response(
+    JSON.stringify({
+      error: 'Service misconfigured',
+      code: 'MISSING_ENV',
+      missing,
+      hint: 'Set the listed secrets via `wrangler secret put` (or your runtime\'s equivalent) and redeploy.',
+    }),
+    { status: 503, headers: { 'Content-Type': 'application/json' } },
+  );
+}
 // ═══════════════════════════════════════════════════════════════════
 // Export (combined fetch + queue handlers for Cloudflare)
 // ═══════════════════════════════════════════════════════════════════
 
 export default {
-  fetch: app.fetch,
+  fetch: (req: Request, env: Env, ctx: ExecutionContext) => {
+    const check = __assertEnv(env);
+    if (!check.ok) return __envFailureResponse(check.missing);
+    return app.fetch(req, env, ctx);
+  },
   async queue(batch: MessageBatch<WebhookMessage>, env: Env): Promise<void> {
     for (const message of batch.messages) {
       try {

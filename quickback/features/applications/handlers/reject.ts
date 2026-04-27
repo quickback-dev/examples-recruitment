@@ -1,7 +1,7 @@
-import type { ActionExecutor } from "@quickback/types";
+import { ActionExecutor, TransitionLostError } from "@quickback/types";
 import { applications } from "../schema";
 
-export const execute: ActionExecutor = async ({ db, record, input, auditFields, whereRecord }) => {
+export const execute: ActionExecutor = async ({ db, record, input, auditFields, whereTransition }) => {
   const suffix = input.reason ? ` — ${input.reason}` : "";
   const appendedNotes = `${record.notes ?? ""}${record.notes ? "\n" : ""}Rejected${suffix}`.trim();
   const [updated] = await db
@@ -9,9 +9,10 @@ export const execute: ActionExecutor = async ({ db, record, input, auditFields, 
     .set({
       status: "rejected",
       notes: appendedNotes,
-      modifiedAt: auditFields.modifiedAt,
+      modifiedAt: auditFields!.modifiedAt,
     })
-    .where(whereRecord!(applications))
+    .where(whereTransition!(applications))
     .returning();
+  if (!updated) throw new TransitionLostError("status", record.status, "rejected");
   return updated;
 };

@@ -5,7 +5,7 @@
  * To make changes, update your config and feature definitions in the quickback/ folder,
  * then run `quickback compile` to regenerate.
  */
-import { index, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 import { sql } from 'drizzle-orm';
 import { jobs } from "../jobs/schema";
 import { candidates } from "../candidates/schema";
@@ -33,7 +33,7 @@ export const applications = sqliteTable("applications", {
   jobId: text("job_id").notNull().references(() => jobs.id, { onDelete: "cascade" }),
   candidateId: text("candidate_id").notNull().references(() => candidates.id, { onDelete: "cascade" }),
   status: text("status", { enum: ["applied", "screening", "interview", "offer", "hired", "rejected", "withdrawn"] as const }).default("applied").notNull(),
-  appliedAt: text("applied_at"),
+  appliedAt: text("applied_at").default(sql`(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`),
   notes: text("notes"),
   organizationId: text("organization_id").notNull(),
 
@@ -45,6 +45,10 @@ export const applications = sqliteTable("applications", {
     deletedBy: text("deleted_by"),
   }, (t) => ({
   applications_status_idx: index("applications_status_idx").on(t.status),
+  applications_jobId_candidateId_unique: uniqueIndex("applications_jobId_candidateId_unique").on(t.jobId, t.candidateId),
+  applications_organization_id_deleted_at_idx: index("applications_organization_id_deleted_at_idx").on(t.organizationId, t.deletedAt),
+  applications_job_id_idx: index("applications_job_id_idx").on(t.jobId),
+  applications_candidate_id_idx: index("applications_candidate_id_idx").on(t.candidateId)
 }));
 
 /**

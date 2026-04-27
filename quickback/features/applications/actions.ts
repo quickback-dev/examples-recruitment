@@ -25,7 +25,7 @@ export default defineActions(applications, {
     description: "Move an application forward in the pipeline.",
     input: z.object({
       nextStatus: z.enum(["screening", "interview", "offer"]),
-      notes: z.string().optional(),
+      notes: z.string().max(2000).optional(),
     }),
     access: { roles: ["owner", "admin"] },
     transition: {
@@ -55,7 +55,9 @@ export default defineActions(applications, {
   reject: {
     description: "Reject an application with an optional reason.",
     input: z.object({
-      reason: z.string().optional(),
+      // Bounded — reject's handler appends to existing notes, so unbounded
+      // reason text compounds across rejections.
+      reason: z.string().max(500).optional(),
     }),
     access: { roles: ["owner", "admin"] },
     transition: {
@@ -74,7 +76,11 @@ export default defineActions(applications, {
   withdraw: {
     description: "Candidate withdrew their application.",
     input: z.object({}),
-    access: { roles: ["owner", "admin", "member"] },
+    // Tightened from `member` — withdraw is a state mutation that should be a
+    // hiring-team decision, not something any org member can fire on any
+    // candidate's application. (Members can still *read* applications via
+    // read.access.)
+    access: { roles: ["owner", "admin"] },
     transition: {
       field: "status",
       to: "withdrawn",
@@ -86,5 +92,23 @@ export default defineActions(applications, {
       },
     },
     handler: "./handlers/withdraw",
+  },
+
+  /**
+   * Standalone action — exercises the no-record route generator and the
+   * empty-input-schema (`Record<string, never>`) path. Returns a count of
+   * applications grouped by status for the active org's pipeline.
+   *
+   * Standalone actions don't bind to `:id` and don't receive `record` in the
+   * handler params. The transition DSL doesn't apply here.
+   */
+  stats: {
+    description: "Count applications by status across the org's pipeline.",
+    standalone: true,
+    path: "/applications/stats",
+    method: "GET",
+    input: z.object({}),
+    access: { roles: ["owner", "admin", "member"] },
+    handler: "./handlers/stats",
   },
 });

@@ -10,7 +10,8 @@ import { eq, and, or, gt, gte, lt, lte, ne, like, inArray, asc, desc, count, sql
 import { applications } from './schema';
 import type { AppContext } from '../../lib/types';
 import type { CloudflareBindings } from '../../env';
-import { getOrgMemberRole } from '../../lib/org-access';
+import { jobs } from '../jobs/schema';
+import { candidates } from '../candidates/schema';
 import { 
   buildFirewallConditions,
   validateCreate,
@@ -18,6 +19,8 @@ import {
   VIEWS_CONFIG,
   CRUD_ACCESS
 } from './applications.resource';
+import { buildFirewallConditions as buildJobsFirewallConditions } from '../jobs/jobs.resource';
+import { buildFirewallConditions as buildCandidatesFirewallConditions } from '../candidates/candidates.resource';
 import { actions } from './actions';
 import { createScopedDb, buildScopeConditions } from '../../lib/scoped-db';
 import { jsonWithEtag } from '../../lib/etag';
@@ -25,6 +28,8 @@ import { evaluateAccess, evaluateAccessPreRecord, evaluateAccessReason } from '.
 import { AuthErrors, FirewallErrors, AccessErrors, GuardErrors, BatchErrors } from '../../lib/errors';
 import { z } from 'zod';
 import { parseJsonWithSchema } from '../../lib/request-validation';
+import { interviews } from '../interviews/schema';
+import { buildFirewallConditions as buildInterviewsFirewallConditions } from '../interviews/interviews.resource';
 
 // Helper function to parse filter values from query strings
 function parseFilterValue(value: string): string | number | boolean {
@@ -54,21 +59,96 @@ function escapeLike(value: string): string {
 const CreateBodySchema = z.object({
   jobId: z.string(),
   candidateId: z.string(),
-  appliedAt: z.coerce.date().optional(),
-  notes: z.string().optional(),
+  notes: z.string().max(4000).optional(),
 }).strict();
 const UpdateBodySchema = z.object({
-  notes: z.string().optional(),
+  notes: z.string().max(4000).optional(),
 }).strict();
 const BatchUpdateRecordSchema = z.object({
-  notes: z.string().optional(),
+  notes: z.string().max(4000).optional(),
 }).extend({ id: z.string() }).strict();
 const BatchOptionsSchema = z.object({ failFast: z.boolean() }).strict().optional();
 const BatchCreateBodySchema = z.object({ records: z.array(CreateBodySchema), options: BatchOptionsSchema }).strict();
 const BatchUpdateBodySchema = z.object({ records: z.array(BatchUpdateRecordSchema), options: BatchOptionsSchema }).strict();
 const BatchDeleteBodySchema = z.object({ ids: z.array(z.string()), options: BatchOptionsSchema }).strict();
 
-const app = new Hono<{ Bindings: CloudflareBindings; Variables: { ctx: AppContext; db: any; services: any; authDb: any } }>();
+const app = new Hono<{ Bindings: CloudflareBindings; Variables: { ctx: AppContext; db: any; services: any; authDb: any; requestId: string } }>();
+
+// ═══════════════════════════════════════════════════════
+
+// STANDALONE ACTIONS
+
+// ═══════════════════════════════════════════════════════
+
+// Count applications by status across the org
+// STATS: GET /stats
+app.get('/stats', async (c) => {
+  const ctx = c.get('ctx');
+  const unsafeDb = c.get('db');
+  const services = c.get('services');
+
+  // Authentication check
+  if (!ctx.authenticated) {
+    return c.json(AuthErrors.missing(), 401);
+  }
+  // Organization check
+  if (!ctx.activeOrgId) {
+    
+    return c.json(AccessErrors.noOrg(), 403);
+  }
+  // Role check
+  if (!ctx.roles?.some(r => ["owner","admin","member"].includes(r))) {
+    
+    return c.json(AccessErrors.roleRequired(["owner","admin","member"], ctx.roles), 403);
+  }
+  // Scoped DB — auto-enforces org isolation, owner filtering, and soft delete
+  const db = createScopedDb(unsafeDb, ctx);
+
+
+  // Input validation (from query params)
+  const url = new URL(c.req.url);
+  const rawInput: Record<string, any> = {};
+  for (const key of url.searchParams.keys()) {
+    const allValues = url.searchParams.getAll(key);
+    rawInput[key] = allValues.length > 1 ? allValues : allValues[0];
+  }
+  const parseResult = actions["stats"].input.safeParse(rawInput);
+  if (!parseResult.success) {
+    return c.json({
+      error: 'Invalid input',
+      layer: 'validation',
+      details: parseResult.error.issues
+    }, 400);
+  }
+  // Zod's inferred type for the validated input is structurally compatible with
+  // the handler's declared TInput at runtime, but TS won't accept e.g. {} where
+  // a handler annotates ActionExecutor<Record<string, never>>. The validation
+  // is already enforced above; widen here so the call line typechecks regardless
+  // of how strictly the handler typed its input.
+  const input: any = parseResult.data;
+
+  // Prepare audit fields for action handlers that create/update records
+  // Note: createdBy/modifiedBy are auto-injected by the audit DB wrapper
+  const now = new Date().toISOString();
+  const auditFields = { createdAt: now, modifiedAt: now };
+
+  // Execute action
+  try {
+    const result = await actions["stats"].execute({ db, unsafeDb: undefined, env: c.env, ctx, record: undefined, input, services, c, auditFields });
+    
+    return c.json(result);
+  } catch (error: any) {
+    
+    if (error?.name === 'ActionError') {
+      return c.json({
+        error: error.message,
+        code: error.code,
+        ...(error.details ? { details: error.details } : {}),
+      }, error.statusCode || 400);
+    }
+    throw error;
+  }
+});
 
 // ═══════════════════════════════════════════════════════
 // READ: GET /applications
@@ -108,6 +188,11 @@ const VIEWS = {
 } as const;
 const DEFAULT_VIEW = "";
 const DEFAULT_SEARCHABLE: string[] = ["status","notes"];
+// Closed allowlist of *declared* column names. Used for ?sort=, ?fields=,
+// and ?<col>= filter validation in place of `field in <table>`, which
+// admitted Drizzle's internal keys (`_`, `getSQL`, etc.). Unknown fields
+// no-op cleanly without ever touching the runtime table object.
+const KNOWN_COLUMNS: ReadonlySet<string> = new Set(["id","jobId","candidateId","status","appliedAt","notes","organizationId"]);
 // Per-column filter parsers — generated from the q DSL column kinds so a
 // "123" passed for a TEXT column stays a string instead of being coerced to
 // a number by the generic parseFilterValue.
@@ -149,7 +234,8 @@ app.get('/', async (c) => {
     return c.json({ error: 'Unknown view', code: 'VIEW_NOT_FOUND', view: params.view }, 400);
   }
 
-  // Member-of-org check (cross-org reads via ?organizationId=...)
+  // Active-org scope (cross-org reads gated to platform admins).
+  // See helpers/cross-tenant.ts for the full rationale.
   const requestedOrgId = params.organizationId || ctx.activeOrgId;
   if (!requestedOrgId) {
     return c.json({
@@ -158,23 +244,20 @@ app.get('/', async (c) => {
       hint: 'Pass organizationId query param or set active organization in session'
     }, 400);
   }
-  let effectiveCtx = params.organizationId ? { ...ctx, activeOrgId: requestedOrgId } : ctx;
-  if (params.organizationId && ctx.authenticated) {
+  let effectiveCtx = ctx;
+  // Only fire the cross-tenant guard when the caller HAS an active org
+  // and is asking to leave it. Unauthenticated PUBLIC callers and
+  // signed-in users with no active org just specify the tenant via
+  // ?organizationId=; that's not a "switch", it's the only addressing
+  // they have. The firewall WHERE clause uses requestedOrgId, so the
+  // scope is still enforced.
+  if (params.organizationId && ctx.activeOrgId && params.organizationId !== ctx.activeOrgId) {
     if (ctx.userRole !== 'admin') {
-      const authDb = c.get('authDb');
-      if (!authDb) {
-        return c.json({
-          error: 'Auth database unavailable',
-          code: 'AUTH_DB_UNAVAILABLE',
-          hint: 'Set authDb in request context to validate organization membership'
-        }, 500);
-      }
-      const memberRole = await getOrgMemberRole(authDb, ctx.userId!, requestedOrgId);
-      if (!memberRole) {
-        return c.json(AccessErrors.roleRequired(['owner', 'admin', 'member'], ctx.roles), 403);
-      }
-      effectiveCtx = { ...effectiveCtx, roles: [memberRole] };
+      return c.json(AccessErrors.crossTenantForbidden(), 403);
     }
+    effectiveCtx = { ...ctx, activeOrgId: requestedOrgId, roles: [] };
+  } else if (params.organizationId && !ctx.activeOrgId) {
+    effectiveCtx = { ...ctx, activeOrgId: requestedOrgId };
   }
 
   // Access gate. View-level access wins over read-level access.
@@ -197,7 +280,7 @@ app.get('/', async (c) => {
   const sortParam = params.sort || (view as any).query?.defaultSort || 'createdAt';
   const isMultiSort = sortParam.includes(',') || sortParam.startsWith('-');
   const acceptSort = (fieldName: string) =>
-    fieldName in applications && (sortAllowlist === null || sortAllowlist.has(fieldName));
+    KNOWN_COLUMNS.has(fieldName) && (sortAllowlist === null || sortAllowlist.has(fieldName));
   if (isMultiSort) {
     for (const part of sortParam.split(',')) {
       const trimmed = part.trim();
@@ -227,14 +310,14 @@ app.get('/', async (c) => {
   if (viewFields && viewFields.length > 0) {
     const projected: Record<string, any> = {};
     for (const f of viewFields) {
-      if (f in applications) projected[f] = applications[f as keyof typeof applications];
+      if (KNOWN_COLUMNS.has(f)) projected[f] = applications[f as keyof typeof applications];
     }
     if (Object.keys(projected).length > 0) selectFields = projected;
   } else if (params.fields) {
     const requested: Record<string, any> = {};
     for (const f of params.fields.split(',')) {
       const fieldName = f.trim();
-      if (fieldName && fieldName in applications) {
+      if (fieldName && KNOWN_COLUMNS.has(fieldName)) {
         requested[fieldName] = applications[fieldName as keyof typeof applications];
       }
     }
@@ -255,7 +338,7 @@ app.get('/', async (c) => {
     if (reservedParams.has(key)) continue;
 
     const [field, op] = key.split('.');
-    if (!(field in applications)) continue;
+    if (!KNOWN_COLUMNS.has(field)) continue;
     if (filterAllowlist !== null && !filterAllowlist.has(field)) continue;
 
     const column = applications[field as keyof typeof applications] as any;
@@ -302,7 +385,7 @@ app.get('/', async (c) => {
   if (params.search && searchableColumns.length > 0) {
     const searchTerm = `%${escapeLike(params.search)}%`;
     const searchConditions = searchableColumns
-      .filter((col: string) => col in applications)
+      .filter((col: string) => KNOWN_COLUMNS.has(col))
       .map((col: string) => sql`${applications[col as keyof typeof applications] as any} LIKE ${searchTerm} ESCAPE '\\'`);
     if (searchConditions.length > 0) {
       filterConditions.push(or(...searchConditions)!);
@@ -329,11 +412,17 @@ app.get('/', async (c) => {
     total = countResult?.value ?? 0;
   }
 
-  query = query.limit(limit).offset(offset);
-  const results = await query;
+  // Over-fetch by one row to determine hasMore reliably. A flat
+  // results.length === limit check would lie on a final page that
+  // exactly fills the limit; the +1 probe distinguishes "more rows
+  // exist" from "this page happens to be full".
+  query = query.limit(limit + 1).offset(offset);
+  const _rawResults = await query;
+  const _hasMoreFromProbe = _rawResults.length > limit;
+  const results = _hasMoreFromProbe ? _rawResults.slice(0, limit) : _rawResults;
 
   // Pagination metadata. When ?total=true was passed we report counted totals;
-  // otherwise we report a hasMore signal computed from the page size.
+  // otherwise we report a hasMore signal computed from the over-fetch probe.
   const pagination = total !== null
     ? {
         total,
@@ -347,12 +436,12 @@ app.get('/', async (c) => {
         count: results.length,
         page: Math.floor(offset / limit) + 1,
         pageSize: limit,
-        hasMore: results.length === limit,
+        hasMore: _hasMoreFromProbe,
       };
 
   return jsonWithEtag(c, {
     data: results,
-    view: viewName === '__default' ? null : viewName,
+    view: (viewName as string) === '__default' ? null : viewName,
     pagination,
   });
 });
@@ -434,6 +523,30 @@ const parseResult = await parseJsonWithSchema(c.req.raw, BatchCreateBodySchema);
         }
         errors.push({ index: i, record, error });
         continue;
+      }
+
+      // FK existence checks (tenant-scoped where the target has a firewall)
+      if (record.jobId !== undefined && record.jobId !== null) {
+        const [_fk_jobId] = await db.select({ id: jobs.id }).from(jobs).where(and(eq(jobs.id, record.jobId as string), buildJobsFirewallConditions(ctx))).limit(1);
+        if (!_fk_jobId) {
+          errors.push({
+            index: i,
+            record,
+            error: { error: 'Referenced jobs row not found', code: 'FK_NOT_FOUND', layer: 'validation', field: 'jobId' }
+          });
+          continue;
+        }
+      }
+      if (record.candidateId !== undefined && record.candidateId !== null) {
+        const [_fk_candidateId] = await db.select({ id: candidates.id }).from(candidates).where(and(eq(candidates.id, record.candidateId as string), buildCandidatesFirewallConditions(ctx))).limit(1);
+        if (!_fk_candidateId) {
+          errors.push({
+            index: i,
+            record,
+            error: { error: 'Referenced candidates row not found', code: 'FK_NOT_FOUND', layer: 'validation', field: 'candidateId' }
+          });
+          continue;
+        }
       }
 
     // Apply defaults, ownership, computed fields, and audit fields
@@ -811,6 +924,11 @@ app.delete('/batch', async (c) => {
           .returning();
 
         success = result;
+  // Cascade soft delete to child tables (cross-feature targets are tenant-scoped)
+  await db.update(interviews).set({
+    deletedAt: new Date().toISOString(),
+    modifiedAt: new Date().toISOString(),
+  }).where(and(buildInterviewsFirewallConditions(ctx), inArray(interviews.applicationId, validIds)));
       } catch (error: any) {
         // Database error during delete
         if (failFast) {
@@ -862,6 +980,11 @@ app.delete('/batch', async (c) => {
 // Order: 1. auth gate → 2. pre-query access (role-only) →
 //        3. firewall query → 4. post-query access (record-aware) → 5. masking
 // ═══════════════════════════════════════════════════════
+// Closed allowlist of *declared* column names — gates ?fields= against
+// real columns instead of Drizzle's internal table keys (`_`, `getSQL`,
+// the column symbol bag) which a `field in <table>` check would admit.
+const KNOWN_COLUMNS_GET: ReadonlySet<string> = new Set(["id","jobId","candidateId","status","appliedAt","notes","organizationId"]);
+
 app.get('/:id', async (c) => {
   const ctx = c.get('ctx');
   const db = c.get('db');
@@ -871,10 +994,26 @@ app.get('/:id', async (c) => {
     return c.json({ error: 'Unauthorized', code: 'UNAUTHORIZED' }, 401);
   }
 
+  // Active-org scope (cross-org access gated to platform admins).
+  // See helpers/cross-tenant.ts for the full rationale.
+  let effectiveCtx = ctx;
+  const _xtRequestedOrgId = c.req.query('organizationId');
+  // Same constraint as the list path: only fire when the caller has
+  // an active org and is asking to leave it. PUBLIC + per-record
+  // routes can still address by id without a session.
+  if (_xtRequestedOrgId && ctx.activeOrgId && _xtRequestedOrgId !== ctx.activeOrgId) {
+    if (ctx.userRole !== 'admin') {
+      return c.json(AccessErrors.crossTenantForbidden(), 403);
+    }
+    effectiveCtx = { ...ctx, activeOrgId: _xtRequestedOrgId, roles: [] };
+  } else if (_xtRequestedOrgId && !ctx.activeOrgId) {
+    effectiveCtx = { ...ctx, activeOrgId: _xtRequestedOrgId };
+  }
+
   // Pre-query access check (role gate only)
   const getAccess = {"roles":["owner","admin","member"]};
-  if (!await evaluateAccessPreRecord(getAccess, ctx)) {
-    return c.json(AccessErrors.roleRequired((getAccess as any).roles || [], ctx.roles, (getAccess as any).userRole, ctx.userRole), 403);
+  if (!await evaluateAccessPreRecord(getAccess, effectiveCtx)) {
+    return c.json(AccessErrors.roleRequired((getAccess as any).roles || [], effectiveCtx.roles, (getAccess as any).userRole, effectiveCtx.userRole), 403);
   }
 
   // Field selection: ?fields=id,name,email
@@ -885,7 +1024,7 @@ app.get('/:id', async (c) => {
     const requested: Record<string, any> = {};
     for (const f of fieldsParam.split(',')) {
       const fieldName = f.trim();
-      if (fieldName && fieldName in applications) {
+      if (fieldName && KNOWN_COLUMNS_GET.has(fieldName)) {
         requested[fieldName] = applications[fieldName as keyof typeof applications];
       }
     }
@@ -896,7 +1035,7 @@ app.get('/:id', async (c) => {
 
   // Query with firewall
   const baseQuery = selectFields ? db.select(selectFields).from(applications) : db.select().from(applications);
-  const [record] = await baseQuery.where(and(buildFirewallConditions(ctx), eq(applications.id, id)));
+  const [record] = await baseQuery.where(and(buildFirewallConditions(effectiveCtx), eq(applications.id, id)));
 
   if (!record) {
     return c.json(FirewallErrors.notFound(), 403);
@@ -904,8 +1043,8 @@ app.get('/:id', async (c) => {
 
   // Access check
   const getAccessFull = {"roles":["owner","admin","member"]};
-  if (!await evaluateAccess(getAccessFull, ctx)) {
-    return c.json(AccessErrors.roleRequired((getAccessFull as any).roles || [], ctx.roles, (getAccessFull as any).userRole, ctx.userRole), 403);
+  if (!await evaluateAccess(getAccessFull, effectiveCtx)) {
+    return c.json(AccessErrors.roleRequired((getAccessFull as any).roles || [], effectiveCtx.roles, (getAccessFull as any).userRole, effectiveCtx.userRole), 403);
   }
 
   // Apply masking
@@ -954,6 +1093,20 @@ const parseResult = await parseJsonWithSchema(c.req.raw, CreateBodySchema);
     }
     if (validation.notCreateable.length > 0) {
       return c.json(GuardErrors.fieldNotCreateable(validation.notCreateable), 400);
+    }
+  }
+
+  // FK existence checks (tenant-scoped where the target has a firewall)
+  if (body.jobId !== undefined && body.jobId !== null) {
+    const [_fk_jobId] = await db.select({ id: jobs.id }).from(jobs).where(and(eq(jobs.id, body.jobId as string), buildJobsFirewallConditions(ctx))).limit(1);
+    if (!_fk_jobId) {
+      return c.json({ error: 'Referenced jobs row not found', code: 'FK_NOT_FOUND', layer: 'validation', field: 'jobId' }, 400);
+    }
+  }
+  if (body.candidateId !== undefined && body.candidateId !== null) {
+    const [_fk_candidateId] = await db.select({ id: candidates.id }).from(candidates).where(and(eq(candidates.id, body.candidateId as string), buildCandidatesFirewallConditions(ctx))).limit(1);
+    if (!_fk_candidateId) {
+      return c.json({ error: 'Referenced candidates row not found', code: 'FK_NOT_FOUND', layer: 'validation', field: 'candidateId' }, 400);
     }
   }
 
@@ -1019,22 +1172,38 @@ app.patch('/:id', async (c) => {
     return c.json({ error: 'Unauthorized', code: 'UNAUTHORIZED' }, 401);
   }
 
+  // Active-org scope (cross-org access gated to platform admins).
+  // See helpers/cross-tenant.ts for the full rationale.
+  let effectiveCtx = ctx;
+  const _xtRequestedOrgId = c.req.query('organizationId');
+  // Same constraint as the list path: only fire when the caller has
+  // an active org and is asking to leave it. PUBLIC + per-record
+  // routes can still address by id without a session.
+  if (_xtRequestedOrgId && ctx.activeOrgId && _xtRequestedOrgId !== ctx.activeOrgId) {
+    if (ctx.userRole !== 'admin') {
+      return c.json(AccessErrors.crossTenantForbidden(), 403);
+    }
+    effectiveCtx = { ...ctx, activeOrgId: _xtRequestedOrgId, roles: [] };
+  } else if (_xtRequestedOrgId && !ctx.activeOrgId) {
+    effectiveCtx = { ...ctx, activeOrgId: _xtRequestedOrgId };
+  }
+
   // Pre-query access check (role gate only — closes 404 vs 403 ID probes)
-  if (!await evaluateAccessPreRecord(CRUD_ACCESS.update.access, ctx)) {
-    return c.json(AccessErrors.roleRequired((CRUD_ACCESS.update.access as any).roles || [], ctx.roles, (CRUD_ACCESS.update.access as any).userRole, ctx.userRole), 403);
+  if (!await evaluateAccessPreRecord(CRUD_ACCESS.update.access, effectiveCtx)) {
+    return c.json(AccessErrors.roleRequired((CRUD_ACCESS.update.access as any).roles || [], effectiveCtx.roles, (CRUD_ACCESS.update.access as any).userRole, effectiveCtx.userRole), 403);
   }
 
   // Fetch with firewall
   const [record] = await db.select().from(applications)
-    .where(and(buildFirewallConditions(ctx), eq(applications.id, id)));
+    .where(and(buildFirewallConditions(effectiveCtx), eq(applications.id, id)));
 
   if (!record) {
     return c.json(FirewallErrors.notFound(), 403);
   }
 
   // Access check
-  if (!await evaluateAccess(CRUD_ACCESS.update.access, ctx)) {
-    return c.json(AccessErrors.roleRequired((CRUD_ACCESS.update.access as any).roles || [], ctx.roles, (CRUD_ACCESS.update.access as any).userRole, ctx.userRole), 403);
+  if (!await evaluateAccess(CRUD_ACCESS.update.access, effectiveCtx)) {
+    return c.json(AccessErrors.roleRequired((CRUD_ACCESS.update.access as any).roles || [], effectiveCtx.roles, (CRUD_ACCESS.update.access as any).userRole, effectiveCtx.userRole), 403);
   }
 
   const parseResult = await parseJsonWithSchema(c.req.raw, UpdateBodySchema);
@@ -1076,7 +1245,7 @@ app.patch('/:id', async (c) => {
 
   try {
     const result = await db.update(applications).set(data)
-      .where(and(buildFirewallConditions(ctx), eq(applications.id, id))).returning();
+      .where(and(buildFirewallConditions(effectiveCtx), eq(applications.id, id))).returning();
 
     return c.json(result[0]);
   } catch (error: any) {
@@ -1127,29 +1296,50 @@ app.delete('/:id', async (c) => {
     return c.json({ error: 'Unauthorized', code: 'UNAUTHORIZED' }, 401);
   }
 
+  // Active-org scope (cross-org access gated to platform admins).
+  // See helpers/cross-tenant.ts for the full rationale.
+  let effectiveCtx = ctx;
+  const _xtRequestedOrgId = c.req.query('organizationId');
+  // Same constraint as the list path: only fire when the caller has
+  // an active org and is asking to leave it. PUBLIC + per-record
+  // routes can still address by id without a session.
+  if (_xtRequestedOrgId && ctx.activeOrgId && _xtRequestedOrgId !== ctx.activeOrgId) {
+    if (ctx.userRole !== 'admin') {
+      return c.json(AccessErrors.crossTenantForbidden(), 403);
+    }
+    effectiveCtx = { ...ctx, activeOrgId: _xtRequestedOrgId, roles: [] };
+  } else if (_xtRequestedOrgId && !ctx.activeOrgId) {
+    effectiveCtx = { ...ctx, activeOrgId: _xtRequestedOrgId };
+  }
+
   // Pre-query access check (role gate only — closes 404 vs 403 ID probes)
-  if (!await evaluateAccessPreRecord(CRUD_ACCESS.delete.access, ctx)) {
-    return c.json(AccessErrors.roleRequired((CRUD_ACCESS.delete.access as any).roles || [], ctx.roles, (CRUD_ACCESS.delete.access as any).userRole, ctx.userRole), 403);
+  if (!await evaluateAccessPreRecord(CRUD_ACCESS.delete.access, effectiveCtx)) {
+    return c.json(AccessErrors.roleRequired((CRUD_ACCESS.delete.access as any).roles || [], effectiveCtx.roles, (CRUD_ACCESS.delete.access as any).userRole, effectiveCtx.userRole), 403);
   }
 
   // Fetch with firewall
   const [record] = await db.select().from(applications)
-    .where(and(buildFirewallConditions(ctx), eq(applications.id, id)));
+    .where(and(buildFirewallConditions(effectiveCtx), eq(applications.id, id)));
 
   if (!record) {
     return c.json(FirewallErrors.notFound(), 403);
   }
 
   // Access check
-  if (!await evaluateAccess(CRUD_ACCESS.delete.access, ctx)) {
-    return c.json(AccessErrors.roleRequired((CRUD_ACCESS.delete.access as any).roles || [], ctx.roles, (CRUD_ACCESS.delete.access as any).userRole, ctx.userRole), 403);
+  if (!await evaluateAccess(CRUD_ACCESS.delete.access, effectiveCtx)) {
+    return c.json(AccessErrors.roleRequired((CRUD_ACCESS.delete.access as any).roles || [], effectiveCtx.roles, (CRUD_ACCESS.delete.access as any).userRole, effectiveCtx.userRole), 403);
   }
   
   // Soft delete
   await db.update(applications).set({
     deletedAt: new Date().toISOString(),
     modifiedAt: new Date().toISOString(),
-  }).where(and(buildFirewallConditions(ctx), eq(applications.id, id)));
+  }).where(and(buildFirewallConditions(effectiveCtx), eq(applications.id, id)));
+  // Cascade soft delete to child tables (cross-feature targets are tenant-scoped)
+  await db.update(interviews).set({
+    deletedAt: new Date().toISOString(),
+    modifiedAt: new Date().toISOString(),
+  }).where(and(buildInterviewsFirewallConditions(effectiveCtx), eq(interviews.applicationId, id)));
 
   return c.json({ success: true });
 });
@@ -1172,16 +1362,24 @@ app.post('/:id/advance', async (c) => {
   }
   
   
-  // Input validation
-  const rawInput = await c.req.json().catch(() => ({}));
-  const parseResult = actions["advance"].input.safeParse(rawInput);
-  if (!parseResult.success) {
+  // Input validation — route through parseJsonWithSchema so malformed
+  // JSON returns INVALID_JSON 400 (rather than silently coercing to {})
+  // and the body size cap fires before we hand the bytes to JSON.parse.
+  // CRUD routes already use this helper; actions follow suit so an empty
+  // schema doesn't quietly accept garbage as a state-changing trigger.
+  const parseResult = await parseJsonWithSchema(c.req.raw, actions["advance"].input);
+  if (!parseResult.ok) {
+    const status = parseResult.code === 'PAYLOAD_TOO_LARGE' ? 413 : 400;
     return c.json({
-      error: 'Invalid input',
-      details: parseResult.error.issues
-    }, 400);
+      error: parseResult.error,
+      code: parseResult.code,
+      layer: 'validation',
+      ...(parseResult.fields ? { fields: parseResult.fields } : {}),
+    }, status);
   }
-  const input = parseResult.data;
+  // Widen so handlers that narrow TInput on ActionExecutor still typecheck
+  // (Zod has already enforced the validated shape).
+  const input: any = parseResult.data;
 
   // Fetch record with firewall unless this is an explicit cross-tenant admin action
   const [record] = await unsafeDb.select().from(applications)
@@ -1221,7 +1419,7 @@ app.post('/:id/advance', async (c) => {
   if (transitionConfig) {
     const currentValue = (record as any)[transitionConfig.field];
     const allowedTargets = transitionConfig.fromTo?.[currentValue] ?? [];
-    const targetValue = transitionConfig.to ?? input?.[transitionConfig.via ?? 'nextStatus'];
+    const targetValue = transitionConfig.to ?? (input as any)?.[transitionConfig.via ?? 'nextStatus'];
     if (!allowedTargets.includes(targetValue)) {
       return c.json(
         AccessErrors.actionNotAllowedForState(transitionConfig.field, currentValue, targetValue, allowedTargets),
@@ -1240,6 +1438,15 @@ app.post('/:id/advance', async (c) => {
   // a refactor that swaps `db` back to `unsafeDb`.
   const whereRecord = (table: any) => and(...buildScopeConditions(table, ctx), eq((table as any).id, (record as any).id));
 
+  // whereTransition — same as whereRecord, but also AND-merges
+  // `eq(table["status"], "<currentValue>")` so the
+  // canonical state UPDATE atomically validates the from-state at the SQL
+  // layer. This closes the TOCTOU window between the route's transition
+  // pre-check and the UPDATE. Handlers throw `TransitionLostError` when
+  // `.returning()` comes back empty, which the catch below translates to
+  // 409 ACCESS_TRANSITION_LOST.
+  const whereTransition = (table: any) => and(...buildScopeConditions(table, ctx), eq((table as any).id, (record as any).id), eq((table as any)["status"], (record as any)["status"]));
+
   // Prepare audit fields for action handlers that create/update records
   // Note: createdBy/modifiedBy are auto-injected by the audit DB wrapper
   const now = new Date().toISOString();
@@ -1247,11 +1454,21 @@ app.post('/:id/advance', async (c) => {
 
   // Execute action
   try {
-    const result = await actions["advance"].execute({ db, unsafeDb: undefined, env: c.env, ctx, record, input, services, c, auditFields, whereRecord });
+    const result = await actions["advance"].execute({ db, unsafeDb: undefined, env: c.env, ctx, record, input, services, c, auditFields, whereRecord, whereTransition });
     
     return c.json(result);
   } catch (error: any) {
     
+    if (error?.name === 'TransitionLostError') {
+      // Concurrent action moved the record's transition field between our
+      // pre-check and the UPDATE. The write was lost; re-fetch and retry
+      // is the right client behaviour. Distinct from 409 stale-state
+      // (ACCESS_ACTION_NOT_ALLOWED_FOR_STATE) which fires *before* the write.
+      return c.json(
+        AccessErrors.transitionLost(error.field, error.expectedFrom, error.attemptedTo),
+        409,
+      );
+    }
     if (error?.name === 'ActionError') {
       return c.json({
         error: error.message,
@@ -1275,16 +1492,24 @@ app.post('/:id/hire', async (c) => {
   }
   
   
-  // Input validation
-  const rawInput = await c.req.json().catch(() => ({}));
-  const parseResult = actions["hire"].input.safeParse(rawInput);
-  if (!parseResult.success) {
+  // Input validation — route through parseJsonWithSchema so malformed
+  // JSON returns INVALID_JSON 400 (rather than silently coercing to {})
+  // and the body size cap fires before we hand the bytes to JSON.parse.
+  // CRUD routes already use this helper; actions follow suit so an empty
+  // schema doesn't quietly accept garbage as a state-changing trigger.
+  const parseResult = await parseJsonWithSchema(c.req.raw, actions["hire"].input);
+  if (!parseResult.ok) {
+    const status = parseResult.code === 'PAYLOAD_TOO_LARGE' ? 413 : 400;
     return c.json({
-      error: 'Invalid input',
-      details: parseResult.error.issues
-    }, 400);
+      error: parseResult.error,
+      code: parseResult.code,
+      layer: 'validation',
+      ...(parseResult.fields ? { fields: parseResult.fields } : {}),
+    }, status);
   }
-  const input = parseResult.data;
+  // Widen so handlers that narrow TInput on ActionExecutor still typecheck
+  // (Zod has already enforced the validated shape).
+  const input: any = parseResult.data;
 
   // Fetch record with firewall unless this is an explicit cross-tenant admin action
   const [record] = await unsafeDb.select().from(applications)
@@ -1324,7 +1549,7 @@ app.post('/:id/hire', async (c) => {
   if (transitionConfig) {
     const currentValue = (record as any)[transitionConfig.field];
     const allowedTargets = transitionConfig.fromTo?.[currentValue] ?? [];
-    const targetValue = transitionConfig.to ?? input?.[transitionConfig.via ?? 'nextStatus'];
+    const targetValue = transitionConfig.to ?? (input as any)?.[transitionConfig.via ?? 'nextStatus'];
     if (!allowedTargets.includes(targetValue)) {
       return c.json(
         AccessErrors.actionNotAllowedForState(transitionConfig.field, currentValue, targetValue, allowedTargets),
@@ -1343,6 +1568,15 @@ app.post('/:id/hire', async (c) => {
   // a refactor that swaps `db` back to `unsafeDb`.
   const whereRecord = (table: any) => and(...buildScopeConditions(table, ctx), eq((table as any).id, (record as any).id));
 
+  // whereTransition — same as whereRecord, but also AND-merges
+  // `eq(table["status"], "<currentValue>")` so the
+  // canonical state UPDATE atomically validates the from-state at the SQL
+  // layer. This closes the TOCTOU window between the route's transition
+  // pre-check and the UPDATE. Handlers throw `TransitionLostError` when
+  // `.returning()` comes back empty, which the catch below translates to
+  // 409 ACCESS_TRANSITION_LOST.
+  const whereTransition = (table: any) => and(...buildScopeConditions(table, ctx), eq((table as any).id, (record as any).id), eq((table as any)["status"], (record as any)["status"]));
+
   // Prepare audit fields for action handlers that create/update records
   // Note: createdBy/modifiedBy are auto-injected by the audit DB wrapper
   const now = new Date().toISOString();
@@ -1350,11 +1584,21 @@ app.post('/:id/hire', async (c) => {
 
   // Execute action
   try {
-    const result = await actions["hire"].execute({ db, unsafeDb: undefined, env: c.env, ctx, record, input, services, c, auditFields, whereRecord });
+    const result = await actions["hire"].execute({ db, unsafeDb: undefined, env: c.env, ctx, record, input, services, c, auditFields, whereRecord, whereTransition });
     
     return c.json(result);
   } catch (error: any) {
     
+    if (error?.name === 'TransitionLostError') {
+      // Concurrent action moved the record's transition field between our
+      // pre-check and the UPDATE. The write was lost; re-fetch and retry
+      // is the right client behaviour. Distinct from 409 stale-state
+      // (ACCESS_ACTION_NOT_ALLOWED_FOR_STATE) which fires *before* the write.
+      return c.json(
+        AccessErrors.transitionLost(error.field, error.expectedFrom, error.attemptedTo),
+        409,
+      );
+    }
     if (error?.name === 'ActionError') {
       return c.json({
         error: error.message,
@@ -1378,16 +1622,24 @@ app.post('/:id/reject', async (c) => {
   }
   
   
-  // Input validation
-  const rawInput = await c.req.json().catch(() => ({}));
-  const parseResult = actions["reject"].input.safeParse(rawInput);
-  if (!parseResult.success) {
+  // Input validation — route through parseJsonWithSchema so malformed
+  // JSON returns INVALID_JSON 400 (rather than silently coercing to {})
+  // and the body size cap fires before we hand the bytes to JSON.parse.
+  // CRUD routes already use this helper; actions follow suit so an empty
+  // schema doesn't quietly accept garbage as a state-changing trigger.
+  const parseResult = await parseJsonWithSchema(c.req.raw, actions["reject"].input);
+  if (!parseResult.ok) {
+    const status = parseResult.code === 'PAYLOAD_TOO_LARGE' ? 413 : 400;
     return c.json({
-      error: 'Invalid input',
-      details: parseResult.error.issues
-    }, 400);
+      error: parseResult.error,
+      code: parseResult.code,
+      layer: 'validation',
+      ...(parseResult.fields ? { fields: parseResult.fields } : {}),
+    }, status);
   }
-  const input = parseResult.data;
+  // Widen so handlers that narrow TInput on ActionExecutor still typecheck
+  // (Zod has already enforced the validated shape).
+  const input: any = parseResult.data;
 
   // Fetch record with firewall unless this is an explicit cross-tenant admin action
   const [record] = await unsafeDb.select().from(applications)
@@ -1427,7 +1679,7 @@ app.post('/:id/reject', async (c) => {
   if (transitionConfig) {
     const currentValue = (record as any)[transitionConfig.field];
     const allowedTargets = transitionConfig.fromTo?.[currentValue] ?? [];
-    const targetValue = transitionConfig.to ?? input?.[transitionConfig.via ?? 'nextStatus'];
+    const targetValue = transitionConfig.to ?? (input as any)?.[transitionConfig.via ?? 'nextStatus'];
     if (!allowedTargets.includes(targetValue)) {
       return c.json(
         AccessErrors.actionNotAllowedForState(transitionConfig.field, currentValue, targetValue, allowedTargets),
@@ -1446,6 +1698,15 @@ app.post('/:id/reject', async (c) => {
   // a refactor that swaps `db` back to `unsafeDb`.
   const whereRecord = (table: any) => and(...buildScopeConditions(table, ctx), eq((table as any).id, (record as any).id));
 
+  // whereTransition — same as whereRecord, but also AND-merges
+  // `eq(table["status"], "<currentValue>")` so the
+  // canonical state UPDATE atomically validates the from-state at the SQL
+  // layer. This closes the TOCTOU window between the route's transition
+  // pre-check and the UPDATE. Handlers throw `TransitionLostError` when
+  // `.returning()` comes back empty, which the catch below translates to
+  // 409 ACCESS_TRANSITION_LOST.
+  const whereTransition = (table: any) => and(...buildScopeConditions(table, ctx), eq((table as any).id, (record as any).id), eq((table as any)["status"], (record as any)["status"]));
+
   // Prepare audit fields for action handlers that create/update records
   // Note: createdBy/modifiedBy are auto-injected by the audit DB wrapper
   const now = new Date().toISOString();
@@ -1453,11 +1714,21 @@ app.post('/:id/reject', async (c) => {
 
   // Execute action
   try {
-    const result = await actions["reject"].execute({ db, unsafeDb: undefined, env: c.env, ctx, record, input, services, c, auditFields, whereRecord });
+    const result = await actions["reject"].execute({ db, unsafeDb: undefined, env: c.env, ctx, record, input, services, c, auditFields, whereRecord, whereTransition });
     
     return c.json(result);
   } catch (error: any) {
     
+    if (error?.name === 'TransitionLostError') {
+      // Concurrent action moved the record's transition field between our
+      // pre-check and the UPDATE. The write was lost; re-fetch and retry
+      // is the right client behaviour. Distinct from 409 stale-state
+      // (ACCESS_ACTION_NOT_ALLOWED_FOR_STATE) which fires *before* the write.
+      return c.json(
+        AccessErrors.transitionLost(error.field, error.expectedFrom, error.attemptedTo),
+        409,
+      );
+    }
     if (error?.name === 'ActionError') {
       return c.json({
         error: error.message,
@@ -1481,16 +1752,24 @@ app.post('/:id/withdraw', async (c) => {
   }
   
   
-  // Input validation
-  const rawInput = await c.req.json().catch(() => ({}));
-  const parseResult = actions["withdraw"].input.safeParse(rawInput);
-  if (!parseResult.success) {
+  // Input validation — route through parseJsonWithSchema so malformed
+  // JSON returns INVALID_JSON 400 (rather than silently coercing to {})
+  // and the body size cap fires before we hand the bytes to JSON.parse.
+  // CRUD routes already use this helper; actions follow suit so an empty
+  // schema doesn't quietly accept garbage as a state-changing trigger.
+  const parseResult = await parseJsonWithSchema(c.req.raw, actions["withdraw"].input);
+  if (!parseResult.ok) {
+    const status = parseResult.code === 'PAYLOAD_TOO_LARGE' ? 413 : 400;
     return c.json({
-      error: 'Invalid input',
-      details: parseResult.error.issues
-    }, 400);
+      error: parseResult.error,
+      code: parseResult.code,
+      layer: 'validation',
+      ...(parseResult.fields ? { fields: parseResult.fields } : {}),
+    }, status);
   }
-  const input = parseResult.data;
+  // Widen so handlers that narrow TInput on ActionExecutor still typecheck
+  // (Zod has already enforced the validated shape).
+  const input: any = parseResult.data;
 
   // Fetch record with firewall unless this is an explicit cross-tenant admin action
   const [record] = await unsafeDb.select().from(applications)
@@ -1530,7 +1809,7 @@ app.post('/:id/withdraw', async (c) => {
   if (transitionConfig) {
     const currentValue = (record as any)[transitionConfig.field];
     const allowedTargets = transitionConfig.fromTo?.[currentValue] ?? [];
-    const targetValue = transitionConfig.to ?? input?.[transitionConfig.via ?? 'nextStatus'];
+    const targetValue = transitionConfig.to ?? (input as any)?.[transitionConfig.via ?? 'nextStatus'];
     if (!allowedTargets.includes(targetValue)) {
       return c.json(
         AccessErrors.actionNotAllowedForState(transitionConfig.field, currentValue, targetValue, allowedTargets),
@@ -1549,6 +1828,15 @@ app.post('/:id/withdraw', async (c) => {
   // a refactor that swaps `db` back to `unsafeDb`.
   const whereRecord = (table: any) => and(...buildScopeConditions(table, ctx), eq((table as any).id, (record as any).id));
 
+  // whereTransition — same as whereRecord, but also AND-merges
+  // `eq(table["status"], "<currentValue>")` so the
+  // canonical state UPDATE atomically validates the from-state at the SQL
+  // layer. This closes the TOCTOU window between the route's transition
+  // pre-check and the UPDATE. Handlers throw `TransitionLostError` when
+  // `.returning()` comes back empty, which the catch below translates to
+  // 409 ACCESS_TRANSITION_LOST.
+  const whereTransition = (table: any) => and(...buildScopeConditions(table, ctx), eq((table as any).id, (record as any).id), eq((table as any)["status"], (record as any)["status"]));
+
   // Prepare audit fields for action handlers that create/update records
   // Note: createdBy/modifiedBy are auto-injected by the audit DB wrapper
   const now = new Date().toISOString();
@@ -1556,11 +1844,21 @@ app.post('/:id/withdraw', async (c) => {
 
   // Execute action
   try {
-    const result = await actions["withdraw"].execute({ db, unsafeDb: undefined, env: c.env, ctx, record, input, services, c, auditFields, whereRecord });
+    const result = await actions["withdraw"].execute({ db, unsafeDb: undefined, env: c.env, ctx, record, input, services, c, auditFields, whereRecord, whereTransition });
     
     return c.json(result);
   } catch (error: any) {
     
+    if (error?.name === 'TransitionLostError') {
+      // Concurrent action moved the record's transition field between our
+      // pre-check and the UPDATE. The write was lost; re-fetch and retry
+      // is the right client behaviour. Distinct from 409 stale-state
+      // (ACCESS_ACTION_NOT_ALLOWED_FOR_STATE) which fires *before* the write.
+      return c.json(
+        AccessErrors.transitionLost(error.field, error.expectedFrom, error.attemptedTo),
+        409,
+      );
+    }
     if (error?.name === 'ActionError') {
       return c.json({
         error: error.message,

@@ -5,7 +5,7 @@
  * To make changes, update your config and feature definitions in the quickback/ folder,
  * then run `quickback compile` to regenerate.
  */
-import { sqliteTable, text, integer, index } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, index, uniqueIndex } from "drizzle-orm/sqlite-core";
 import { sql } from "drizzle-orm";
 
 /**
@@ -48,7 +48,10 @@ export const webhookEvents = sqliteTable("webhook_events", {
 }, (table) => ({
   providerIdx: index("webhook_events_provider_idx").on(table.provider),
   statusIdx: index("webhook_events_status_idx").on(table.status),
-  externalIdIdx: index("webhook_events_external_id_idx").on(table.externalId),
+  // Idempotency: a (provider, externalId) pair must be unique so concurrent
+  // deliveries of the same event collapse to a single insert. SQLite treats
+  // NULL as distinct, so events without an externalId are unaffected.
+  externalIdUniqueIdx: uniqueIndex("webhook_events_external_id_unique_idx").on(table.provider, table.externalId),
 }));
 
 /**

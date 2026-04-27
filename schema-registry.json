@@ -1,17 +1,35 @@
 {
-  "generatedAt": "2026-04-26T17:17:59.784Z",
+  "generatedAt": "2026-04-27T17:41:03.332Z",
   "generatedBy": "quickback-compiler",
-  "version": "0.10.0",
+  "version": "0.10.3",
   "features": {
     "applications": [
       "applications.ts",
       "actions.ts"
     ],
+    "ats-imports": [
+      "ats-imports.ts",
+      "actions.ts"
+    ],
     "candidates": [
       "candidates.ts"
     ],
+    "interviews": [
+      "interview_scores.ts",
+      "interviews.ts",
+      "actions.ts"
+    ],
+    "job-postings": [
+      "job-postings.ts"
+    ],
     "jobs": [
       "jobs.ts"
+    ],
+    "reports": [
+      "actions.ts"
+    ],
+    "custom-view": [
+      "custom-view.ts"
     ]
   },
   "tables": {
@@ -102,15 +120,7 @@
           "notNull": true
         }
       ],
-      "firewall": {
-        "organization": {
-          "column": "organizationId",
-          "source": "ctx.activeOrgId"
-        },
-        "softDelete": {
-          "column": "deletedAt"
-        }
-      },
+      "firewall": {},
       "crud": {
         "create": {
           "access": {
@@ -173,8 +183,7 @@
         "createable": [
           "jobId",
           "candidateId",
-          "notes",
-          "appliedAt"
+          "notes"
         ],
         "updatable": [
           "notes"
@@ -269,12 +278,240 @@
           "access": {
             "roles": [
               "owner",
+              "admin"
+            ]
+          }
+        },
+        {
+          "name": "stats",
+          "description": "Count applications by status across the org",
+          "inputFields": [],
+          "access": {
+            "roles": [
+              "owner",
               "admin",
               "member"
             ]
-          }
+          },
+          "standalone": true,
+          "path": "/applications/stats",
+          "method": "GET"
         }
-      ]
+      ],
+      "defaultSort": {
+        "field": "appliedAt",
+        "order": "desc"
+      },
+      "inputHints": {
+        "status": "select",
+        "notes": "textarea",
+        "jobId": "lookup",
+        "candidateId": "lookup",
+        "appliedAt": "datetime"
+      }
+    },
+    "atsImports": {
+      "name": "atsImports",
+      "dbName": "ats_imports",
+      "apiPath": "ats-imports",
+      "feature": "ats-imports",
+      "columns": [
+        {
+          "name": "id",
+          "dbName": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        {
+          "name": "createdAt",
+          "dbName": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        {
+          "name": "createdBy",
+          "dbName": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        {
+          "name": "modifiedAt",
+          "dbName": "modified_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        {
+          "name": "modifiedBy",
+          "dbName": "modified_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        {
+          "name": "deletedAt",
+          "dbName": "deleted_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        {
+          "name": "externalId",
+          "dbName": "external_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "filterable": "eq"
+        },
+        {
+          "name": "sourceSystem",
+          "dbName": "source_system",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "filterable": "eq"
+        },
+        {
+          "name": "payload",
+          "dbName": "payload",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        {
+          "name": "status",
+          "dbName": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "defaultValue": "pending"
+        },
+        {
+          "name": "error",
+          "dbName": "error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        {
+          "name": "organizationId",
+          "dbName": "organization_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        }
+      ],
+      "firewall": {},
+      "crud": {
+        "create": {
+          "access": {
+            "roles": [
+              "admin",
+              "owner"
+            ]
+          }
+        },
+        "update": {
+          "access": {
+            "roles": [
+              "admin",
+              "owner"
+            ]
+          }
+        },
+        "delete": {
+          "access": {
+            "roles": [
+              "owner"
+            ]
+          },
+          "mode": "soft"
+        },
+        "batchCreate": {
+          "access": {
+            "roles": [
+              "admin",
+              "owner"
+            ]
+          },
+          "maxBatchSize": 100,
+          "allowFailFast": true
+        },
+        "batchUpdate": {
+          "access": {
+            "roles": [
+              "admin",
+              "owner"
+            ]
+          },
+          "maxBatchSize": 100,
+          "allowFailFast": true
+        },
+        "batchDelete": {
+          "access": {
+            "roles": [
+              "owner"
+            ]
+          },
+          "mode": "soft",
+          "maxBatchSize": 100,
+          "allowFailFast": true
+        }
+      },
+      "guards": {
+        "createable": [],
+        "updatable": [],
+        "immutable": [],
+        "protected": {}
+      },
+      "masking": {},
+      "views": {},
+      "validation": {},
+      "actions": [
+        {
+          "name": "upsertBatch",
+          "description": "Idempotent batch upsert from an ATS feed.",
+          "inputFields": [
+            {
+              "name": "sourceSystem",
+              "type": "enum",
+              "required": true
+            },
+            {
+              "name": "externalId",
+              "type": "string",
+              "required": true
+            },
+            {
+              "name": "payload",
+              "type": "string",
+              "required": true
+            }
+          ],
+          "access": {
+            "roles": [
+              "admin",
+              "owner"
+            ]
+          },
+          "standalone": true,
+          "path": "/ats-imports/upsert-batch",
+          "method": "POST"
+        }
+      ],
+      "displayColumn": "externalId",
+      "defaultSort": {
+        "field": "createdAt",
+        "order": "desc"
+      },
+      "inputHints": {
+        "payload": "textarea",
+        "sourceSystem": "select",
+        "status": "select"
+      }
     },
     "candidates": {
       "name": "candidates",
@@ -375,6 +612,20 @@
           "searchable": true
         },
         {
+          "name": "legalName",
+          "dbName": "legal_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        {
+          "name": "governmentId",
+          "dbName": "government_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        {
           "name": "organizationId",
           "dbName": "organization_id",
           "type": "text",
@@ -446,7 +697,9 @@
           "phone",
           "resumeUrl",
           "source",
-          "internalNotes"
+          "internalNotes",
+          "legalName",
+          "governmentId"
         ],
         "updatable": [
           "name",
@@ -454,7 +707,9 @@
           "phone",
           "resumeUrl",
           "source",
-          "internalNotes"
+          "internalNotes",
+          "legalName",
+          "governmentId"
         ],
         "immutable": [],
         "protected": {}
@@ -486,6 +741,34 @@
               "owner"
             ]
           }
+        },
+        "legalName": {
+          "type": "name",
+          "show": {
+            "roles": [
+              "admin",
+              "owner"
+            ]
+          }
+        },
+        "governmentId": {
+          "type": "ssn",
+          "show": {
+            "roles": [
+              "admin",
+              "owner"
+            ]
+          }
+        },
+        "resumeUrl": {
+          "type": "redact",
+          "show": {
+            "roles": [
+              "admin",
+              "owner"
+            ],
+            "or": "owner"
+          }
         }
       },
       "views": {
@@ -498,6 +781,7 @@
           "access": {
             "roles": [
               "member",
+              "recruiter",
               "admin",
               "owner"
             ]
@@ -511,7 +795,9 @@
             "phone",
             "resumeUrl",
             "source",
-            "internalNotes"
+            "internalNotes",
+            "legalName",
+            "governmentId"
           ],
           "access": {
             "roles": [
@@ -523,7 +809,646 @@
       },
       "validation": {},
       "actions": [],
-      "displayColumn": "name"
+      "displayColumn": "name",
+      "defaultSort": {
+        "field": "createdAt",
+        "order": "desc"
+      },
+      "inputHints": {
+        "source": "select",
+        "resumeUrl": "lookup",
+        "internalNotes": "textarea",
+        "legalName": "hidden",
+        "governmentId": "hidden"
+      }
+    },
+    "interviewScores": {
+      "name": "interviewScores",
+      "dbName": "interview_scores",
+      "apiPath": "interview-scores",
+      "feature": "interviews",
+      "columns": [
+        {
+          "name": "id",
+          "dbName": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        {
+          "name": "createdAt",
+          "dbName": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        {
+          "name": "createdBy",
+          "dbName": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        {
+          "name": "modifiedAt",
+          "dbName": "modified_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        {
+          "name": "modifiedBy",
+          "dbName": "modified_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        {
+          "name": "deletedAt",
+          "dbName": "deleted_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        {
+          "name": "interviewId",
+          "dbName": "interview_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        {
+          "name": "scorerId",
+          "dbName": "scorer_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        {
+          "name": "rating",
+          "dbName": "rating",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        {
+          "name": "recommendation",
+          "dbName": "recommendation",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        {
+          "name": "comments",
+          "dbName": "comments",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        }
+      ],
+      "firewall": {},
+      "crud": {},
+      "guards": {
+        "createable": [],
+        "updatable": [],
+        "immutable": [],
+        "protected": {}
+      },
+      "masking": {},
+      "views": {},
+      "validation": {},
+      "actions": [],
+      "internal": true
+    },
+    "interviews": {
+      "name": "interviews",
+      "dbName": "interviews",
+      "apiPath": "interviews",
+      "feature": "interviews",
+      "columns": [
+        {
+          "name": "id",
+          "dbName": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        {
+          "name": "createdAt",
+          "dbName": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        {
+          "name": "createdBy",
+          "dbName": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        {
+          "name": "modifiedAt",
+          "dbName": "modified_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        {
+          "name": "modifiedBy",
+          "dbName": "modified_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        {
+          "name": "deletedAt",
+          "dbName": "deleted_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        {
+          "name": "applicationId",
+          "dbName": "application_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "fkTarget": "applications"
+        },
+        {
+          "name": "scheduledBy",
+          "dbName": "scheduled_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        {
+          "name": "organizationId",
+          "dbName": "organization_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        {
+          "name": "durationMin",
+          "dbName": "duration_min",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "defaultValue": 30
+        },
+        {
+          "name": "location",
+          "dbName": "location",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        {
+          "name": "status",
+          "dbName": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "defaultValue": "scheduled"
+        },
+        {
+          "name": "privateNotes",
+          "dbName": "private_notes",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        }
+      ],
+      "firewall": {
+        "organization": {
+          "column": "organizationId",
+          "source": "ctx.activeOrgId"
+        },
+        "softDelete": {
+          "column": "deletedAt"
+        }
+      },
+      "crud": {
+        "create": {
+          "access": {
+            "roles": [
+              "interviewer",
+              "member",
+              "recruiter",
+              "admin",
+              "owner"
+            ]
+          }
+        },
+        "update": {
+          "access": {
+            "or": [
+              {
+                "roles": [
+                  "admin",
+                  "owner",
+                  "recruiter"
+                ]
+              },
+              {
+                "userRole": [
+                  "admin"
+                ]
+              },
+              {
+                "roles": [
+                  "member",
+                  "interviewer"
+                ],
+                "record": {
+                  "scheduledBy": {
+                    "equals": "$ctx.userId"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "delete": {
+          "access": {
+            "roles": [
+              "owner"
+            ]
+          },
+          "mode": "soft"
+        },
+        "batchCreate": {
+          "access": {
+            "roles": [
+              "interviewer",
+              "member",
+              "recruiter",
+              "admin",
+              "owner"
+            ]
+          },
+          "maxBatchSize": 100,
+          "allowFailFast": true
+        },
+        "batchUpdate": {
+          "access": {
+            "or": [
+              {
+                "roles": [
+                  "admin",
+                  "owner",
+                  "recruiter"
+                ]
+              },
+              {
+                "userRole": [
+                  "admin"
+                ]
+              },
+              {
+                "roles": [
+                  "member",
+                  "interviewer"
+                ],
+                "record": {
+                  "scheduledBy": {
+                    "equals": "$ctx.userId"
+                  }
+                }
+              }
+            ]
+          },
+          "maxBatchSize": 100,
+          "allowFailFast": true
+        },
+        "batchDelete": {
+          "access": {
+            "roles": [
+              "owner"
+            ]
+          },
+          "mode": "soft",
+          "maxBatchSize": 100,
+          "allowFailFast": true
+        }
+      },
+      "guards": {
+        "createable": [
+          "applicationId",
+          "scheduledAt",
+          "durationMin",
+          "location",
+          "privateNotes"
+        ],
+        "updatable": [
+          "scheduledAt",
+          "durationMin",
+          "location",
+          "privateNotes"
+        ],
+        "immutable": [
+          "applicationId"
+        ],
+        "protected": {
+          "status": [
+            "complete",
+            "reschedule",
+            "cancel"
+          ]
+        }
+      },
+      "masking": {},
+      "views": {},
+      "validation": {},
+      "actions": [
+        {
+          "name": "complete",
+          "description": "Finalize an interview with a score and recommendation.",
+          "inputFields": [
+            {
+              "name": "rating",
+              "type": "number",
+              "required": true
+            },
+            {
+              "name": "recommendation",
+              "type": "enum",
+              "required": true
+            },
+            {
+              "name": "comments",
+              "type": "string",
+              "required": false
+            }
+          ],
+          "access": {
+            "roles": [
+              "admin",
+              "owner",
+              "recruiter"
+            ],
+            "record": {
+              "scheduledBy": {
+                "equals": "$ctx.userId"
+              }
+            }
+          }
+        },
+        {
+          "name": "reschedule",
+          "description": "Move an interview to a new datetime.",
+          "inputFields": [
+            {
+              "name": "scheduledAt",
+              "type": "string",
+              "required": true
+            },
+            {
+              "name": "durationMin",
+              "type": "number",
+              "required": false
+            }
+          ],
+          "access": {
+            "roles": [
+              "admin",
+              "owner",
+              "recruiter"
+            ],
+            "record": {
+              "scheduledBy": {
+                "equals": "$ctx.userId"
+              }
+            }
+          }
+        },
+        {
+          "name": "scoreSummary",
+          "description": "Aggregate average rating per interview across the org.",
+          "inputFields": [],
+          "access": {
+            "roles": [
+              "owner",
+              "admin"
+            ]
+          },
+          "standalone": true,
+          "path": "/interviews/score-summary",
+          "method": "GET"
+        }
+      ],
+      "displayColumn": "scheduledAt",
+      "defaultSort": {
+        "field": "scheduledAt",
+        "order": "asc"
+      },
+      "inputHints": {
+        "scheduledAt": "datetime",
+        "status": "select",
+        "location": "select",
+        "privateNotes": "textarea",
+        "applicationId": "lookup"
+      }
+    },
+    "jobPostings": {
+      "name": "jobPostings",
+      "dbName": "job_postings",
+      "apiPath": "job-postings",
+      "feature": "job-postings",
+      "columns": [
+        {
+          "name": "id",
+          "dbName": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        {
+          "name": "createdAt",
+          "dbName": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        {
+          "name": "createdBy",
+          "dbName": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        {
+          "name": "modifiedAt",
+          "dbName": "modified_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        {
+          "name": "modifiedBy",
+          "dbName": "modified_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        {
+          "name": "deletedAt",
+          "dbName": "deleted_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        {
+          "name": "jobId",
+          "dbName": "job_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "fkTarget": "jobs"
+        },
+        {
+          "name": "slug",
+          "dbName": "slug",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "filterable": "eq"
+        },
+        {
+          "name": "headline",
+          "dbName": "headline",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "searchable": true
+        },
+        {
+          "name": "summary",
+          "dbName": "summary",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "searchable": true
+        },
+        {
+          "name": "location",
+          "dbName": "location",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "filterable": "eq"
+        },
+        {
+          "name": "employmentType",
+          "dbName": "employment_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "defaultValue": "full-time",
+          "filterable": "eq"
+        },
+        {
+          "name": "organizationId",
+          "dbName": "organization_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        }
+      ],
+      "firewall": {},
+      "crud": {
+        "create": {
+          "access": {
+            "roles": [
+              "admin",
+              "owner"
+            ]
+          }
+        },
+        "update": {
+          "access": {
+            "roles": [
+              "admin",
+              "owner"
+            ]
+          }
+        },
+        "delete": {
+          "access": {
+            "roles": [
+              "owner"
+            ]
+          },
+          "mode": "soft"
+        },
+        "batchCreate": {
+          "access": {
+            "roles": [
+              "admin",
+              "owner"
+            ]
+          },
+          "maxBatchSize": 100,
+          "allowFailFast": true
+        },
+        "batchUpdate": {
+          "access": {
+            "roles": [
+              "admin",
+              "owner"
+            ]
+          },
+          "maxBatchSize": 100,
+          "allowFailFast": true
+        },
+        "batchDelete": {
+          "access": {
+            "roles": [
+              "owner"
+            ]
+          },
+          "mode": "soft",
+          "maxBatchSize": 100,
+          "allowFailFast": true
+        }
+      },
+      "guards": {
+        "createable": [
+          "jobId",
+          "slug",
+          "headline",
+          "summary",
+          "location",
+          "employmentType"
+        ],
+        "updatable": [
+          "slug",
+          "headline",
+          "summary",
+          "location",
+          "employmentType"
+        ],
+        "immutable": [
+          "jobId"
+        ],
+        "protected": {}
+      },
+      "masking": {},
+      "views": {},
+      "validation": {},
+      "actions": [],
+      "displayColumn": "headline",
+      "defaultSort": {
+        "field": "createdAt",
+        "order": "desc"
+      },
+      "inputHints": {
+        "employmentType": "select",
+        "summary": "richtext",
+        "jobId": "lookup"
+      }
     },
     "jobs": {
       "name": "jobs",
@@ -624,15 +1549,7 @@
           "notNull": true
         }
       ],
-      "firewall": {
-        "organization": {
-          "column": "organizationId",
-          "source": "ctx.activeOrgId"
-        },
-        "softDelete": {
-          "column": "deletedAt"
-        }
-      },
+      "firewall": {},
       "crud": {
         "create": {
           "access": {
@@ -713,18 +1630,246 @@
       "views": {},
       "validation": {},
       "actions": [],
-      "displayColumn": "title"
+      "displayColumn": "title",
+      "defaultSort": {
+        "field": "createdAt",
+        "order": "desc"
+      },
+      "inputHints": {
+        "description": "richtext",
+        "status": "select",
+        "salaryMin": "currency",
+        "salaryMax": "currency",
+        "department": "select"
+      }
+    },
+    "reports": {
+      "name": "reports",
+      "dbName": "",
+      "apiPath": "reports",
+      "feature": "reports",
+      "columns": [],
+      "firewall": {},
+      "crud": {},
+      "guards": {
+        "createable": [],
+        "updatable": [],
+        "immutable": [],
+        "protected": {}
+      },
+      "masking": {},
+      "views": {},
+      "validation": {},
+      "actions": [
+        {
+          "name": "pipelineCsv",
+          "description": "Export the application pipeline as CSV.",
+          "inputFields": [],
+          "access": {
+            "roles": [
+              "admin",
+              "owner",
+              "recruiter"
+            ]
+          },
+          "standalone": true,
+          "path": "/reports/pipeline.csv",
+          "method": "GET",
+          "responseType": "file"
+        }
+      ],
+      "internal": true
+    },
+    "customView": {
+      "name": "customView",
+      "dbName": "custom_view",
+      "apiPath": "custom-view",
+      "feature": "custom-view",
+      "columns": [
+        {
+          "name": "id",
+          "dbName": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        {
+          "name": "createdAt",
+          "dbName": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        {
+          "name": "createdBy",
+          "dbName": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        {
+          "name": "modifiedAt",
+          "dbName": "modified_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        {
+          "name": "modifiedBy",
+          "dbName": "modified_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        {
+          "name": "deletedAt",
+          "dbName": "deleted_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        {
+          "name": "tableName",
+          "dbName": "table_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        {
+          "name": "name",
+          "dbName": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        {
+          "name": "description",
+          "dbName": "description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        {
+          "name": "layoutConfig",
+          "dbName": "layout_config",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        {
+          "name": "isShared",
+          "dbName": "is_shared",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "defaultValue": 0
+        }
+      ],
+      "firewall": {
+        "exception": true
+      },
+      "crud": {
+        "create": {
+          "access": {
+            "roles": [
+              "owner",
+              "admin",
+              "member"
+            ]
+          }
+        },
+        "update": {
+          "access": {
+            "roles": [
+              "owner",
+              "admin",
+              "member"
+            ]
+          }
+        },
+        "delete": {
+          "access": {
+            "roles": [
+              "owner",
+              "admin",
+              "member"
+            ]
+          }
+        },
+        "batchCreate": {
+          "access": {
+            "roles": [
+              "owner",
+              "admin",
+              "member"
+            ]
+          },
+          "maxBatchSize": 100,
+          "allowFailFast": true
+        },
+        "batchUpdate": {
+          "access": {
+            "roles": [
+              "owner",
+              "admin",
+              "member"
+            ]
+          },
+          "maxBatchSize": 100,
+          "allowFailFast": true
+        },
+        "batchDelete": {
+          "access": {
+            "roles": [
+              "owner",
+              "admin",
+              "member"
+            ]
+          },
+          "mode": "soft",
+          "maxBatchSize": 100,
+          "allowFailFast": true
+        }
+      },
+      "guards": {
+        "createable": [],
+        "updatable": [],
+        "immutable": [],
+        "protected": {}
+      },
+      "masking": {},
+      "views": {},
+      "validation": {},
+      "actions": [],
+      "displayColumn": "name",
+      "internal": true
     }
   },
   "tablesByFeature": {
     "applications": [
       "applications"
     ],
+    "ats-imports": [
+      "atsImports"
+    ],
     "candidates": [
       "candidates"
     ],
+    "interviews": [
+      "interviewScores",
+      "interviews"
+    ],
+    "job-postings": [
+      "jobPostings"
+    ],
     "jobs": [
       "jobs"
+    ],
+    "reports": [
+      "reports"
+    ],
+    "custom-view": [
+      "customView"
     ]
   },
   "pages": {},

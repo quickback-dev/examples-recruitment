@@ -48,14 +48,31 @@ export interface ActionExecutorParams<TInput = any> {
   c: Context;
   /** Runtime bindings (Cloudflare env, etc.). Alias for c.env. */
   env: any;
-  /** Audit field helpers (createdAt, createdBy, modifiedAt, modifiedBy) */
-  auditFields?: { createdAt: string; createdBy: string; modifiedAt: string; modifiedBy: string };
+  /**
+   * Timestamps for the action-execution moment. createdBy / modifiedBy are
+   * NOT included here — they're auto-injected by the audit DB wrapper at the
+   * SQL boundary. Handlers that need a fresh timestamp on a write should
+   * splat `...auditFields` into a `set(...)` clause.
+   */
+  auditFields?: { createdAt: string; modifiedAt: string };
   /**
    * Build a Drizzle WHERE clause that targets the current record while AND-merging
    * the resource's firewall + soft-delete conditions. Only present for record-based
    * actions. Prefer this over eq(table.id, record.id) for protected-field writes.
    */
   whereRecord?: (table: any) => any;
+  /**
+   * Like `whereRecord`, but also AND-merges `eq(table[transition.field], currentValue)`.
+   * Only present when the action declares a `transition` policy.
+   *
+   * Use this on the canonical state UPDATE so the write atomically validates
+   * the from-state against the row's actual current value at the SQL layer —
+   * closes the TOCTOU window between the route's transition pre-check and the
+   * UPDATE itself. After `.returning()`, an empty array means the row's state
+   * moved between read and write; throw `TransitionLostError` so the route
+   * returns 409 `ACCESS_TRANSITION_LOST`.
+   */
+  whereTransition?: (table: any) => any;
 }
 
 /**
@@ -92,6 +109,34 @@ export class ActionError extends Error {
     this.code = code;
     this.statusCode = statusCode;
     this.details = details;
+  }
+}
+
+/**
+ * Thrown by record-action handlers when the canonical state UPDATE returned
+ * zero rows because the row's transition field changed between the route's
+ * pre-check and the UPDATE itself. The action route catches this and
+ * translates to 409 ACCESS_TRANSITION_LOST — distinct from ActionError so
+ * handlers don't need to remember the right code.
+ *
+ * @example
+ *   const [updated] = await db.update(applications)
+ *     .set({ status: 'hired' })
+ *     .where(whereTransition!(applications))
+ *     .returning();
+ *   if (!updated) throw new TransitionLostError('status', 'offer', 'hired');
+ */
+export class TransitionLostError extends Error {
+  readonly field: string;
+  readonly expectedFrom: string;
+  readonly attemptedTo: string;
+
+  constructor(field: string, expectedFrom: string, attemptedTo: string) {
+    super(`Transition lost: ${field} was no longer ${expectedFrom} when the update fired (target: ${attemptedTo})`);
+    this.name = 'TransitionLostError';
+    this.field = field;
+    this.expectedFrom = expectedFrom;
+    this.attemptedTo = attemptedTo;
   }
 }
 

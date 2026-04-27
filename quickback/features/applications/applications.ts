@@ -26,13 +26,21 @@ export default feature("applications", {
       .default("applied")
       .required()
       .index(),
-    appliedAt:      q.timestamp().optional(),
-    notes:          q.text().optional(),
-    organizationId: q.text().required(),
+    // `appliedAt` is server-stamped on INSERT via `.defaultNow()` and is not
+    // in the createable allowlist below, so clients can't backdate it. The
+    // SQL default lowers to strftime() on SQLite / `now()` on Postgres.
+    // Stays `.optional()` (column is NULL-able) only so adding the default
+    // to an existing DB doesn't require a NOT-NULL backfill of historical
+    // rows — new rows always populate via the default.
+    appliedAt:      q.timestamp().defaultNow().optional(),
+    notes:          q.text({ maxLength: 4000 }).optional(),
+    organizationId: q.scope("organization"),
   },
-  firewall: [{ field: 'organizationId', equals: 'ctx.activeOrgId' }, { field: 'deletedAt', isNull: true }],
+  // Composite uniqueness — a candidate can only have one application per job
+  // per org. Without this, repeated POSTs silently create duplicate rows.
+  unique: [{ columns: ["jobId", "candidateId"] }],
   guards: {
-    createable: ["jobId", "candidateId", "notes", "appliedAt"],
+    createable: ["jobId", "candidateId", "notes"],
     updatable:  ["notes"],
     immutable:  ["jobId", "candidateId"],
     protected:  {
@@ -58,5 +66,17 @@ export default feature("applications", {
     // Explicit FK-label mappings — would otherwise be inferred by "Id"-stripped convention.
     jobId: "jobs",
     candidateId: "candidates",
+  },
+  // CMS metadata. `defaultSort` lands in the schema registry the CMS
+  // consumes; `inputHints` overrides per-column form rendering. Status
+  // is read-only here because PATCH is blocked by `guards.protected` —
+  // the CMS will surface that as a non-editable field.
+  defaultSort: { field: "appliedAt", order: "desc" },
+  inputHints: {
+    status: "select",
+    notes:  "textarea",
+    jobId:        "lookup",
+    candidateId:  "lookup",
+    appliedAt:    "datetime",
   },
 });

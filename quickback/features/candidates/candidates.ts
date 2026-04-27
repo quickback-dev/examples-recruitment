@@ -22,21 +22,29 @@ import { feature, q } from "@quickback/compiler";
 export default feature("candidates", {
   columns: {
     id:             q.id(),
-    name:           q.text().required().filterable("like").searchable(),
-    email:          q.text().required().filterable("eq").searchable(),
-    phone:          q.text().optional().filterable("eq"),
-    resumeUrl:      q.text().optional(),
+    name:           q.text({ maxLength: 200 }).required().filterable("like").searchable(),
+    email:          q.text({ maxLength: 320 }).required().filterable("eq").searchable(),
+    phone:          q.text({ maxLength: 32 }).optional().filterable("eq"),
+    resumeUrl:      q.url({ maxLength: 2048 }).optional(),
     source:         q.enum(["linkedin", "referral", "careers-page", "other"]).default("other").required().filterable("eq"),
-    internalNotes:  q.text().optional().searchable(),
+    internalNotes:  q.text({ maxLength: 4000 }).optional().searchable(),
+    // Optional payroll/onboarding fields — present only after a candidate
+    // accepts an offer. Both heavily masked: see `masking` below.
+    legalName:      q.text({ maxLength: 200 }).optional(),
+    governmentId:   q.text({ maxLength: 16 }).optional(),
     organizationId: q.scope("organization"),
   },
+  // Composite uniqueness — a candidate's email is unique *per org*, not
+  // globally. Without this, the same email could be added repeatedly to the
+  // same tenant, silently creating duplicate candidate records.
+  unique: [{ columns: ["organizationId", "email"] }],
   // `firewall` block omitted — `q.scope("organization")` triggers the
   // compiler's isolation auto-detection, which synthesises both the org
   // predicate and the soft-delete predicate (deletedAt is auto-detected
   // separately) into a complete firewall config.
   guards: {
-    createable: ["name", "email", "phone", "resumeUrl", "source", "internalNotes"],
-    updatable:  ["name", "email", "phone", "resumeUrl", "source", "internalNotes"],
+    createable: ["name", "email", "phone", "resumeUrl", "source", "internalNotes", "legalName", "governmentId"],
+    updatable:  ["name", "email", "phone", "resumeUrl", "source", "internalNotes", "legalName", "governmentId"],
   },
   masking: {
     // Precedence: each `masking[col]` rule says "this column is redacted
@@ -53,6 +61,24 @@ export default feature("candidates", {
     email:         { type: "email",  show: { roles: ["admin+"] } },
     phone:         { type: "phone",  show: { roles: ["admin+"] } },
     internalNotes: { type: "redact", show: { roles: ["admin+"] } },
+    // `name`-shaped mask: keeps initials so the name column stays
+    // recognisable in lists, but hides surnames from non-admins.
+    legalName:     { type: "name",   show: { roles: ["admin+"] } },
+    // `ssn` mask formats as ***-**-1234 even when only roles match.
+    // Reserved for offer-letter / payroll flows; admin-only by design.
+    governmentId:  { type: "ssn",    show: { roles: ["admin+"] } },
+    // Owner override (createdBy === ctx.userId) bypasses the mask: a
+    // recruiter sees the resume URL unmasked for candidates they
+    // themselves added. Non-admins who didn't add the candidate see
+    // the URL fully redacted.
+    //
+    // Note on `type: 'custom'`: the runtime supports a custom mask fn
+    // (`mask: (v) => …`) but only when authored against the Drizzle
+    // interop path. Features authored via `feature()` go through the
+    // static source parser, which doesn't evaluate function expressions.
+    // For q-DSL features stick to the named built-ins; promote to
+    // `defineTable(...)` if a custom mask is required.
+    resumeUrl: { type: "redact", show: { roles: ["admin+"], or: "owner" } },
   },
   read: {
     access: { roles: ["member+"] },
@@ -68,7 +94,7 @@ export default feature("candidates", {
         },
       },
       full: {
-        fields: ["id", "name", "email", "phone", "resumeUrl", "source", "internalNotes"],
+        fields: ["id", "name", "email", "phone", "resumeUrl", "source", "internalNotes", "legalName", "governmentId"],
         access: { roles: ["admin+"] },
         query: {
           filterable: ["source", "email", "phone"],
@@ -82,5 +108,15 @@ export default feature("candidates", {
     create: { access: { roles: ["admin+"] } },
     update: { access: { roles: ["admin+"] } },
     delete: { access: { roles: ["owner"] }, mode: "soft" },
+  },
+  // CMS metadata.
+  displayColumn: "name",
+  defaultSort: { field: "createdAt", order: "desc" },
+  inputHints: {
+    source:        "select",
+    resumeUrl:     "lookup",
+    internalNotes: "textarea",
+    legalName:     "hidden",  // payroll flow only; not on the default form
+    governmentId:  "hidden",
   },
 });

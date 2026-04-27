@@ -1,11 +1,10 @@
 node_modules/
-.wrangler/
-.dev.vars
 .env
 .env.*
-!.env.example
-*.log
-.DS_Store
+.dev.vars
+*.db
+data/
 dist/
-.idea/
-.vscode/
+.wrangler/
+.DS_Store
+quickback/.archives/

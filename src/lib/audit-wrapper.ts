@@ -49,6 +49,30 @@ export function createAuditDb<T extends object>(
 }
 
 /**
+ * Resolve the writer userId for audit injection. Fails closed when the
+ * surrounding request has no user — every write path in generated routes
+ * runs after the auth middleware sets ctx.userId, so a missing value here
+ * means auth failed silently or the wrapper is being driven from an
+ * unauthenticated path that should not be writing to features tables.
+ *
+ * If you need to write outside a request (cron, queue handler, seed
+ * script), use the unwrapped db (createDb) directly instead of routing
+ * through createAuditDb with no context.
+ */
+function resolveAuditUserId(getCtx: () => any, op: 'insert' | 'update'): string {
+  const ctx = getCtx();
+  const userId = ctx?.userId;
+  if (typeof userId !== 'string' || userId.length === 0) {
+    throw new Error(
+      'audit-wrapper: ' + op + ' reached without ctx.userId. ' +
+      'This indicates an unauthenticated write or auth-context loss. ' +
+      'If this is an intentional system-side write, use the unwrapped db directly.'
+    );
+  }
+  return userId;
+}
+
+/**
  * Wrap insert builder to inject createdBy and modifiedBy
  */
 function wrapInsertBuilder(builder: any, getCtx: () => any) {
@@ -57,7 +81,7 @@ function wrapInsertBuilder(builder: any, getCtx: () => any) {
       const value = Reflect.get(target, prop);
       if (prop === 'values') {
         return (data: any) => {
-          const userId = getCtx()?.userId || 'system';
+          const userId = resolveAuditUserId(getCtx, 'insert');
           const enrich = (item: any) => ({
             ...item,
             createdBy: item.createdBy ?? userId,
@@ -80,7 +104,7 @@ function wrapUpdateBuilder(builder: any, getCtx: () => any) {
       const value = Reflect.get(target, prop);
       if (prop === 'set') {
         return (data: any) => {
-          const userId = getCtx()?.userId || 'system';
+          const userId = resolveAuditUserId(getCtx, 'update');
           const enriched = { ...data, modifiedBy: data.modifiedBy ?? userId };
           // If deletedAt is being set, also set deletedBy (soft delete)
           if (data.deletedAt !== undefined) {

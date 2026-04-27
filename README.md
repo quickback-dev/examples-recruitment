@@ -1,14 +1,19 @@
 # Quickback Example: Recruitment
 
-A pre-compiled [Quickback](https://quickback.dev) project — a hiring pipeline with candidates, jobs, and applications. Clone, `npm install`, `npm run dev`, and you have a working secure multi-tenant API in under a minute.
+A pre-compiled [Quickback](https://quickback.dev) project — a full hiring pipeline (jobs, postings, candidates, applications, interviews, scoring, ATS imports, reports). Clone, `npm install`, `npm run dev`, and you have a working secure multi-tenant API in under a minute.
 
 ## What this example shows
 
-- **PII masking** — `email` and `phone` redacted by role (`recruiter` sees email, `hiring-manager` doesn't)
-- **Field-level guards** — what fields are creatable/updatable per resource, enforced at compile time
-- **Record-scoped actions** — e.g. `approve` only works when `status = 'submitted'`
-- **Org-scoped firewall** — every table auto-filters by organization; impossible to leak across tenants
-- **Soft deletes + audit fields** — injected automatically by the compiler
+- **PII masking** with multiple shapes (`email`, `phone`, `ssn`, `name`, `redact`) gated by role; owner override via `show.or: 'owner'` so a recruiter sees their own candidates' resume URLs unmasked
+- **Field-level guards** — `createable` / `updatable` / `immutable` / `protected` allowlists, enforced at compile time
+- **Record-scoped actions** with state-machine transitions and TOCTOU-safe `whereTransition` UPDATEs (concurrent `hire` + `reject` → exactly one wins, the other gets 409 `ACCESS_TRANSITION_LOST`)
+- **Org-scoped firewall** with `firewallErrorMode: "hide"` (opaque 404s for cross-tenant probes on sensitive resources like `interviews`)
+- **PUBLIC routes** (`job-postings` browses unauthenticated via `?organizationId=`; every call audit-logged)
+- **Custom role hierarchy** — `interviewer < member < recruiter < admin < owner`, with `+` suffix expansion and `access.or[]` combinators that mix org roles, Better Auth platform-admin tier, and per-record `$ctx.userId` gates
+- **Drizzle interop** — `interview_scores` is a sibling `sqliteTable` (no `defineTable`) used internally by the `complete` action handler; auto-injected `organizationId` and audit fields keep tenant scoping
+- **`guards: false`** on `ats-imports` for a trusted-feed staging table where the schema *is* the allowlist
+- **Tableless feature** — `reports/` ships only standalone actions (CSV file response on `/api/v1/reports/pipeline.csv`)
+- **Soft deletes + audit fields** injected automatically; CMS metadata (`displayColumn`, `defaultSort`, `inputHints`) drives the `/cms` SPA
 
 ## Project structure
 
@@ -58,21 +63,53 @@ The generated files under `src/`, `drizzle.config.ts`, `openapi.json`, etc. rege
 
 ## Deploy (Cloudflare)
 
-First deploy needs D1 databases:
+1. Create the three D1 databases and one KV namespace:
 
-```sh
-npx wrangler d1 create q-recruit-auth
-npx wrangler d1 create q-recruit
-npx wrangler d1 create q-recruit-webhooks
-```
+   ```sh
+   npx wrangler d1 create recruitment-example-auth
+   npx wrangler d1 create recruitment-example-features
+   npx wrangler d1 create recruitment-example-webhooks
+   npx wrangler kv namespace create recruitment-example-kv
+   ```
 
-Copy the three database IDs into `wrangler.toml` under the `[[d1_databases]]` blocks. Then:
+   Each command prints an ID. Keep them — you'll paste them in the next step.
 
-```sh
-npx wrangler d1 migrations apply q-recruit-auth --remote
-npx wrangler d1 migrations apply q-recruit --remote
-npx wrangler deploy
-```
+2. Open `quickback/quickback.config.ts` and replace the placeholder UUIDs:
+
+   ```ts
+   database: defineDatabase("cloudflare-d1", {
+     // ...
+     authDatabaseId:     "<id from `wrangler d1 create recruitment-example-auth`>",
+     featuresDatabaseId: "<id from `wrangler d1 create recruitment-example-features`>",
+     webhooksDatabaseId: "<id from `wrangler d1 create recruitment-example-webhooks`>",
+     kvNamespaceId:      "<id from `wrangler kv namespace create recruitment-example-kv`>",
+   }),
+   ```
+
+   This is the right place for these IDs — they live in source control with the rest of your config, and `quickback compile` regenerates `wrangler.toml` from them. Editing `wrangler.toml` directly works too, but the next compile will overwrite your changes.
+
+3. Recompile so the generated `wrangler.toml` picks up the new IDs:
+
+   ```sh
+   npx @quickback-dev/cli compile
+   ```
+
+4. Apply migrations to the remote DBs and set the auth signing secret:
+
+   ```sh
+   npx wrangler d1 migrations apply recruitment-example-auth --remote
+   npx wrangler d1 migrations apply recruitment-example-features --remote
+   npx wrangler d1 migrations apply recruitment-example-webhooks --remote
+   npx wrangler secret put BETTER_AUTH_SECRET   # paste a strong random value
+   ```
+
+5. Deploy:
+
+   ```sh
+   npx wrangler deploy
+   ```
+
+   By default the worker ships to a `*.workers.dev` subdomain. To bind a custom domain, add a `routes` block to `runtime` in `quickback/quickback.config.ts` (see the commented example) and recompile before redeploying.
 
 ## About Quickback
 

@@ -12,22 +12,73 @@ export type ParseJsonResult<T> =
   | { ok: true; data: T }
   | {
       ok: false;
-      code: 'INVALID_JSON' | 'VALIDATION_ERROR';
+      code: 'INVALID_JSON' | 'VALIDATION_ERROR' | 'PAYLOAD_TOO_LARGE';
       error: string;
       fields?: Record<string, string>;
     };
 
 /**
+ * Default request-body cap. Cloudflare Workers allow up to 100 MB but
+ * application bodies that large are almost always either a misconfigured
+ * client or an attempted resource-exhaustion abuse — list/batch routes
+ * fan out per-record and a 100 MB body materialised into per-record loops
+ * is genuinely dangerous. 1 MiB is generous for any realistic JSON payload
+ * and matches the default many frameworks ship.
+ */
+const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
+
+/**
  * Parse request JSON and validate against a Zod schema.
  * Returns structured errors suitable for deterministic 400 responses.
+ *
+ * Enforces a body size cap before parsing — the cap is read first from
+ * the Content-Length header, then (defensively) by streaming the body
+ * with a running byte counter. Either over-limit signal returns 413
+ * `PAYLOAD_TOO_LARGE` rather than crashing the parser or stalling the
+ * route on a hostile body.
  */
 export async function parseJsonWithSchema<TSchema extends ZodTypeAny>(
   request: Request,
   schema: TSchema,
+  options: { maxBodyBytes?: number } = {},
 ): Promise<ParseJsonResult<ZodInfer<TSchema>>> {
+  const maxBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
+
+  // Cheap path: trust the client-declared Content-Length. Some clients
+  // omit it (chunked / streaming); the read-loop below catches those.
+  const declaredLen = request.headers.get('content-length');
+  if (declaredLen) {
+    const n = Number(declaredLen);
+    if (Number.isFinite(n) && n > maxBytes) {
+      return {
+        ok: false,
+        code: 'PAYLOAD_TOO_LARGE',
+        error: `Request body exceeds ${maxBytes} byte limit.`,
+      };
+    }
+  }
+
+  let raw: string;
+  try {
+    raw = await readBoundedText(request, maxBytes);
+  } catch (err: any) {
+    if (err && err.code === 'PAYLOAD_TOO_LARGE') {
+      return {
+        ok: false,
+        code: 'PAYLOAD_TOO_LARGE',
+        error: `Request body exceeds ${maxBytes} byte limit.`,
+      };
+    }
+    return {
+      ok: false,
+      code: 'INVALID_JSON',
+      error: 'Request body must be valid JSON.',
+    };
+  }
+
   let body: unknown;
   try {
-    body = await request.json();
+    body = raw.length === 0 ? undefined : JSON.parse(raw);
   } catch {
     return {
       ok: false,
@@ -47,6 +98,38 @@ export async function parseJsonWithSchema<TSchema extends ZodTypeAny>(
   }
 
   return { ok: true, data: parsed.data };
+}
+
+async function readBoundedText(request: Request, maxBytes: number): Promise<string> {
+  // Stream the body so we can short-circuit the moment we exceed the
+  // limit, instead of buffering the whole thing into memory first.
+  // Workers / undici give us a ReadableStream of Uint8Array chunks.
+  const body = request.body;
+  if (!body) return '';
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let total = 0;
+  let out = '';
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (value) {
+        total += value.byteLength;
+        if (total > maxBytes) {
+          // Throw a tagged error so the caller can map to PAYLOAD_TOO_LARGE.
+          const err: any = new Error('payload too large');
+          err.code = 'PAYLOAD_TOO_LARGE';
+          throw err;
+        }
+        out += decoder.decode(value, { stream: true });
+      }
+    }
+    out += decoder.decode();
+  } finally {
+    try { reader.releaseLock(); } catch { /* ignore */ }
+  }
+  return out;
 }
 
 /**

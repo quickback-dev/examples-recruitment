@@ -20,7 +20,7 @@ import type { Env } from '../lib/auth';
 import type { AppContext } from '../lib/types';
 import type { Services } from '../lib/services';
 
-type HonoAppType = Hono<{ Bindings: Env; Variables: AppContext & { services?: Services } }>;
+type HonoAppType = Hono<{ Bindings: Env; Variables: { ctx: AppContext; db: any; services: Services; requestId: string } }>;
 
 type RpcId = string | number | null | undefined;
 interface RpcMessage {
@@ -418,6 +418,29 @@ const TOOLS: ToolEntry[] = [
     ]
   },
   {
+    "name": "batchCreateAtsImports",
+    "description": "Batch create AtsImports records",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/AtsImportsCreate"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "_method": "post",
+    "_path": "/api/v1/ats-imports/batch",
+    "_pathParams": [],
+    "_queryParams": [],
+    "_bodyFields": [
+      "items"
+    ]
+  },
+  {
     "name": "batchCreateCandidates",
     "description": "Batch create Candidates records",
     "inputSchema": {
@@ -434,6 +457,75 @@ const TOOLS: ToolEntry[] = [
     },
     "_method": "post",
     "_path": "/api/v1/candidates/batch",
+    "_pathParams": [],
+    "_queryParams": [],
+    "_bodyFields": [
+      "items"
+    ]
+  },
+  {
+    "name": "batchCreateCustomView",
+    "description": "Batch create CustomView records",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/CustomViewCreate"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "_method": "post",
+    "_path": "/api/v1/custom-view/batch",
+    "_pathParams": [],
+    "_queryParams": [],
+    "_bodyFields": [
+      "items"
+    ]
+  },
+  {
+    "name": "batchCreateInterviews",
+    "description": "Batch create Interviews records",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/InterviewsCreate"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "_method": "post",
+    "_path": "/api/v1/interviews/batch",
+    "_pathParams": [],
+    "_queryParams": [],
+    "_bodyFields": [
+      "items"
+    ]
+  },
+  {
+    "name": "batchCreateJobPostings",
+    "description": "Batch create JobPostings records",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/JobPostingsCreate"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "_method": "post",
+    "_path": "/api/v1/job-postings/batch",
     "_pathParams": [],
     "_queryParams": [],
     "_bodyFields": [
@@ -491,6 +583,33 @@ const TOOLS: ToolEntry[] = [
     ]
   },
   {
+    "name": "batchDeleteAtsImports",
+    "description": "Batch delete AtsImports records",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "required": [
+        "ids"
+      ],
+      "additionalProperties": false
+    },
+    "_method": "delete",
+    "_path": "/api/v1/ats-imports/batch",
+    "_pathParams": [],
+    "_queryParams": [],
+    "_bodyFields": [
+      "ids"
+    ]
+  },
+  {
     "name": "batchDeleteCandidates",
     "description": "Batch delete Candidates records",
     "inputSchema": {
@@ -511,6 +630,87 @@ const TOOLS: ToolEntry[] = [
     },
     "_method": "delete",
     "_path": "/api/v1/candidates/batch",
+    "_pathParams": [],
+    "_queryParams": [],
+    "_bodyFields": [
+      "ids"
+    ]
+  },
+  {
+    "name": "batchDeleteCustomView",
+    "description": "Batch delete CustomView records",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "required": [
+        "ids"
+      ],
+      "additionalProperties": false
+    },
+    "_method": "delete",
+    "_path": "/api/v1/custom-view/batch",
+    "_pathParams": [],
+    "_queryParams": [],
+    "_bodyFields": [
+      "ids"
+    ]
+  },
+  {
+    "name": "batchDeleteInterviews",
+    "description": "Batch delete Interviews records",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "required": [
+        "ids"
+      ],
+      "additionalProperties": false
+    },
+    "_method": "delete",
+    "_path": "/api/v1/interviews/batch",
+    "_pathParams": [],
+    "_queryParams": [],
+    "_bodyFields": [
+      "ids"
+    ]
+  },
+  {
+    "name": "batchDeleteJobPostings",
+    "description": "Batch delete JobPostings records",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "required": [
+        "ids"
+      ],
+      "additionalProperties": false
+    },
+    "_method": "delete",
+    "_path": "/api/v1/job-postings/batch",
     "_pathParams": [],
     "_queryParams": [],
     "_bodyFields": [
@@ -577,6 +777,38 @@ const TOOLS: ToolEntry[] = [
     ]
   },
   {
+    "name": "batchUpdateAtsImports",
+    "description": "Batch update AtsImports records",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "data": {
+                "$ref": "#/components/schemas/AtsImportsUpdate"
+              }
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "_method": "patch",
+    "_path": "/api/v1/ats-imports/batch",
+    "_pathParams": [],
+    "_queryParams": [],
+    "_bodyFields": [
+      "items"
+    ]
+  },
+  {
     "name": "batchUpdateCandidates",
     "description": "Batch update Candidates records",
     "inputSchema": {
@@ -602,6 +834,102 @@ const TOOLS: ToolEntry[] = [
     },
     "_method": "patch",
     "_path": "/api/v1/candidates/batch",
+    "_pathParams": [],
+    "_queryParams": [],
+    "_bodyFields": [
+      "items"
+    ]
+  },
+  {
+    "name": "batchUpdateCustomView",
+    "description": "Batch update CustomView records",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "data": {
+                "$ref": "#/components/schemas/CustomViewUpdate"
+              }
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "_method": "patch",
+    "_path": "/api/v1/custom-view/batch",
+    "_pathParams": [],
+    "_queryParams": [],
+    "_bodyFields": [
+      "items"
+    ]
+  },
+  {
+    "name": "batchUpdateInterviews",
+    "description": "Batch update Interviews records",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "data": {
+                "$ref": "#/components/schemas/InterviewsUpdate"
+              }
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "_method": "patch",
+    "_path": "/api/v1/interviews/batch",
+    "_pathParams": [],
+    "_queryParams": [],
+    "_bodyFields": [
+      "items"
+    ]
+  },
+  {
+    "name": "batchUpdateJobPostings",
+    "description": "Batch update JobPostings records",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "data": {
+                "$ref": "#/components/schemas/JobPostingsUpdate"
+              }
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "_method": "patch",
+    "_path": "/api/v1/job-postings/batch",
     "_pathParams": [],
     "_queryParams": [],
     "_bodyFields": [
@@ -759,9 +1087,6 @@ const TOOLS: ToolEntry[] = [
         },
         "notes": {
           "type": "string"
-        },
-        "appliedAt": {
-          "type": "string"
         }
       },
       "required": [
@@ -777,8 +1102,49 @@ const TOOLS: ToolEntry[] = [
     "_bodyFields": [
       "jobId",
       "candidateId",
-      "notes",
-      "appliedAt"
+      "notes"
+    ]
+  },
+  {
+    "name": "createAtsImports",
+    "description": "Create a new AtsImports",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "externalId": {
+          "type": "string"
+        },
+        "sourceSystem": {
+          "type": "string"
+        },
+        "payload": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "organizationId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "externalId",
+        "sourceSystem",
+        "payload",
+        "organizationId"
+      ],
+      "additionalProperties": false
+    },
+    "_method": "post",
+    "_path": "/api/v1/ats-imports",
+    "_pathParams": [],
+    "_queryParams": [],
+    "_bodyFields": [
+      "externalId",
+      "sourceSystem",
+      "payload",
+      "error",
+      "organizationId"
     ]
   },
   {
@@ -804,6 +1170,12 @@ const TOOLS: ToolEntry[] = [
         },
         "internalNotes": {
           "type": "string"
+        },
+        "legalName": {
+          "type": "string"
+        },
+        "governmentId": {
+          "type": "string"
         }
       },
       "required": [
@@ -823,7 +1195,132 @@ const TOOLS: ToolEntry[] = [
       "phone",
       "resumeUrl",
       "source",
-      "internalNotes"
+      "internalNotes",
+      "legalName",
+      "governmentId"
+    ]
+  },
+  {
+    "name": "createCustomView",
+    "description": "Create a new CustomView",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "tableName": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "layoutConfig": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "tableName",
+        "name",
+        "layoutConfig"
+      ],
+      "additionalProperties": false
+    },
+    "_method": "post",
+    "_path": "/api/v1/custom-view",
+    "_pathParams": [],
+    "_queryParams": [],
+    "_bodyFields": [
+      "tableName",
+      "name",
+      "description",
+      "layoutConfig"
+    ]
+  },
+  {
+    "name": "createInterviews",
+    "description": "Create a new Interviews",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "applicationId": {
+          "type": "string"
+        },
+        "scheduledAt": {
+          "type": "string"
+        },
+        "durationMin": {
+          "type": "integer"
+        },
+        "location": {
+          "type": "string"
+        },
+        "privateNotes": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "applicationId",
+        "durationMin"
+      ],
+      "additionalProperties": false
+    },
+    "_method": "post",
+    "_path": "/api/v1/interviews",
+    "_pathParams": [],
+    "_queryParams": [],
+    "_bodyFields": [
+      "applicationId",
+      "scheduledAt",
+      "durationMin",
+      "location",
+      "privateNotes"
+    ]
+  },
+  {
+    "name": "createJobPostings",
+    "description": "Create a new JobPostings",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "jobId": {
+          "type": "string"
+        },
+        "slug": {
+          "type": "string"
+        },
+        "headline": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "location": {
+          "type": "string"
+        },
+        "employmentType": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "jobId",
+        "slug",
+        "headline",
+        "employmentType"
+      ],
+      "additionalProperties": false
+    },
+    "_method": "post",
+    "_path": "/api/v1/job-postings",
+    "_pathParams": [],
+    "_queryParams": [],
+    "_bodyFields": [
+      "jobId",
+      "slug",
+      "headline",
+      "summary",
+      "location",
+      "employmentType"
     ]
   },
   {
@@ -952,6 +1449,30 @@ const TOOLS: ToolEntry[] = [
     "_bodyFields": null
   },
   {
+    "name": "deleteAtsImports",
+    "description": "Delete a AtsImports",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "_method": "delete",
+    "_path": "/api/v1/ats-imports/{id}",
+    "_pathParams": [
+      "id"
+    ],
+    "_queryParams": [],
+    "_bodyFields": null
+  },
+  {
     "name": "deleteCandidates",
     "description": "Delete a Candidates",
     "inputSchema": {
@@ -969,6 +1490,78 @@ const TOOLS: ToolEntry[] = [
     },
     "_method": "delete",
     "_path": "/api/v1/candidates/{id}",
+    "_pathParams": [
+      "id"
+    ],
+    "_queryParams": [],
+    "_bodyFields": null
+  },
+  {
+    "name": "deleteCustomView",
+    "description": "Delete a CustomView",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "_method": "delete",
+    "_path": "/api/v1/custom-view/{id}",
+    "_pathParams": [
+      "id"
+    ],
+    "_queryParams": [],
+    "_bodyFields": null
+  },
+  {
+    "name": "deleteInterviews",
+    "description": "Delete a Interviews",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "_method": "delete",
+    "_path": "/api/v1/interviews/{id}",
+    "_pathParams": [
+      "id"
+    ],
+    "_queryParams": [],
+    "_bodyFields": null
+  },
+  {
+    "name": "deleteJobPostings",
+    "description": "Delete a JobPostings",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "_method": "delete",
+    "_path": "/api/v1/job-postings/{id}",
     "_pathParams": [
       "id"
     ],
@@ -1110,6 +1703,30 @@ const TOOLS: ToolEntry[] = [
     "_bodyFields": null
   },
   {
+    "name": "getAtsImports",
+    "description": "Get a AtsImports by ID",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "_method": "get",
+    "_path": "/api/v1/ats-imports/{id}",
+    "_pathParams": [
+      "id"
+    ],
+    "_queryParams": [],
+    "_bodyFields": null
+  },
+  {
     "name": "getCandidates",
     "description": "Get a Candidates by ID",
     "inputSchema": {
@@ -1162,6 +1779,30 @@ const TOOLS: ToolEntry[] = [
     "_bodyFields": null
   },
   {
+    "name": "getCustomView",
+    "description": "Get a CustomView by ID",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "_method": "get",
+    "_path": "/api/v1/custom-view/{id}",
+    "_pathParams": [
+      "id"
+    ],
+    "_queryParams": [],
+    "_bodyFields": null
+  },
+  {
     "name": "getFullOrganization",
     "description": "Get organization with members and invitations",
     "inputSchema": {
@@ -1172,6 +1813,54 @@ const TOOLS: ToolEntry[] = [
     "_method": "get",
     "_path": "/auth/v1/organization/get-full-organization",
     "_pathParams": [],
+    "_queryParams": [],
+    "_bodyFields": null
+  },
+  {
+    "name": "getInterviews",
+    "description": "Get a Interviews by ID",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "_method": "get",
+    "_path": "/api/v1/interviews/{id}",
+    "_pathParams": [
+      "id"
+    ],
+    "_queryParams": [],
+    "_bodyFields": null
+  },
+  {
+    "name": "getJobPostings",
+    "description": "Get a JobPostings by ID",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "_method": "get",
+    "_path": "/api/v1/job-postings/{id}",
+    "_pathParams": [
+      "id"
+    ],
     "_queryParams": [],
     "_bodyFields": null
   },
@@ -1212,6 +1901,86 @@ const TOOLS: ToolEntry[] = [
     "_pathParams": [],
     "_queryParams": [],
     "_bodyFields": null
+  },
+  {
+    "name": "interviewsComplete",
+    "description": "Finalize an interview with a score and recommendation.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "rating": {
+          "type": "integer"
+        },
+        "recommendation": {
+          "type": "string",
+          "enum": [
+            "strong-no",
+            "no",
+            "neutral",
+            "yes",
+            "strong-yes"
+          ]
+        },
+        "comments": {
+          "type": "string",
+          "nullable": true
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "_method": "post",
+    "_path": "/api/v1/interviews/{id}/complete",
+    "_pathParams": [
+      "id"
+    ],
+    "_queryParams": [],
+    "_bodyFields": [
+      "rating",
+      "recommendation",
+      "comments"
+    ]
+  },
+  {
+    "name": "interviewsReschedule",
+    "description": "Move an interview to a new datetime.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "scheduledAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "durationMin": {
+          "type": "integer",
+          "nullable": true
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "_method": "post",
+    "_path": "/api/v1/interviews/{id}/reschedule",
+    "_pathParams": [
+      "id"
+    ],
+    "_queryParams": [],
+    "_bodyFields": [
+      "scheduledAt",
+      "durationMin"
+    ]
   },
   {
     "name": "inviteMember",
@@ -1414,6 +2183,158 @@ const TOOLS: ToolEntry[] = [
     "_bodyFields": null
   },
   {
+    "name": "listAtsImports",
+    "description": "List AtsImports records",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Filter by id (exact match)"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter by createdAt (exact match)"
+        },
+        "createdBy": {
+          "type": "string",
+          "description": "Filter by createdBy (exact match)"
+        },
+        "modifiedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter by modifiedAt (exact match)"
+        },
+        "modifiedBy": {
+          "type": "string",
+          "description": "Filter by modifiedBy (exact match)"
+        },
+        "deletedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter by deletedAt (exact match)"
+        },
+        "externalId": {
+          "type": "string",
+          "description": "Filter by externalId (exact match)"
+        },
+        "sourceSystem": {
+          "type": "string",
+          "description": "Filter by sourceSystem (exact match)"
+        },
+        "payload": {
+          "type": "string",
+          "description": "Filter by payload (exact match)"
+        },
+        "status": {
+          "type": "string",
+          "description": "Filter by status (exact match)"
+        },
+        "error": {
+          "type": "string",
+          "description": "Filter by error (exact match)"
+        },
+        "organizationId": {
+          "type": "string",
+          "description": "Filter by organizationId (exact match)"
+        },
+        "createdAt.gt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter createdAt gt"
+        },
+        "createdAt.gte": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter createdAt gte"
+        },
+        "createdAt.lt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter createdAt lt"
+        },
+        "createdAt.lte": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter createdAt lte"
+        },
+        "modifiedAt.gt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter modifiedAt gt"
+        },
+        "modifiedAt.gte": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter modifiedAt gte"
+        },
+        "modifiedAt.lt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter modifiedAt lt"
+        },
+        "modifiedAt.lte": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter modifiedAt lte"
+        },
+        "deletedAt.gt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter deletedAt gt"
+        },
+        "deletedAt.gte": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter deletedAt gte"
+        },
+        "deletedAt.lt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter deletedAt lt"
+        },
+        "deletedAt.lte": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter deletedAt lte"
+        }
+      },
+      "additionalProperties": false
+    },
+    "_method": "get",
+    "_path": "/api/v1/ats-imports",
+    "_pathParams": [],
+    "_queryParams": [
+      "id",
+      "createdAt",
+      "createdBy",
+      "modifiedAt",
+      "modifiedBy",
+      "deletedAt",
+      "externalId",
+      "sourceSystem",
+      "payload",
+      "status",
+      "error",
+      "organizationId",
+      "createdAt.gt",
+      "createdAt.gte",
+      "createdAt.lt",
+      "createdAt.lte",
+      "modifiedAt.gt",
+      "modifiedAt.gte",
+      "modifiedAt.lt",
+      "modifiedAt.lte",
+      "deletedAt.gt",
+      "deletedAt.gte",
+      "deletedAt.lt",
+      "deletedAt.lte"
+    ],
+    "_bodyFields": null
+  },
+  {
     "name": "listCandidates",
     "description": "List Candidates records",
     "inputSchema": {
@@ -1470,6 +2391,14 @@ const TOOLS: ToolEntry[] = [
         "internalNotes": {
           "type": "string",
           "description": "Filter by internalNotes (exact match)"
+        },
+        "legalName": {
+          "type": "string",
+          "description": "Filter by legalName (exact match)"
+        },
+        "governmentId": {
+          "type": "string",
+          "description": "Filter by governmentId (exact match)"
         },
         "organizationId": {
           "type": "string",
@@ -1554,6 +2483,509 @@ const TOOLS: ToolEntry[] = [
       "resumeUrl",
       "source",
       "internalNotes",
+      "legalName",
+      "governmentId",
+      "organizationId",
+      "createdAt.gt",
+      "createdAt.gte",
+      "createdAt.lt",
+      "createdAt.lte",
+      "modifiedAt.gt",
+      "modifiedAt.gte",
+      "modifiedAt.lt",
+      "modifiedAt.lte",
+      "deletedAt.gt",
+      "deletedAt.gte",
+      "deletedAt.lt",
+      "deletedAt.lte"
+    ],
+    "_bodyFields": null
+  },
+  {
+    "name": "listCustomView",
+    "description": "List CustomView records",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Filter by id (exact match)"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter by createdAt (exact match)"
+        },
+        "createdBy": {
+          "type": "string",
+          "description": "Filter by createdBy (exact match)"
+        },
+        "modifiedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter by modifiedAt (exact match)"
+        },
+        "modifiedBy": {
+          "type": "string",
+          "description": "Filter by modifiedBy (exact match)"
+        },
+        "deletedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter by deletedAt (exact match)"
+        },
+        "tableName": {
+          "type": "string",
+          "description": "Filter by tableName (exact match)"
+        },
+        "name": {
+          "type": "string",
+          "description": "Filter by name (exact match)"
+        },
+        "description": {
+          "type": "string",
+          "description": "Filter by description (exact match)"
+        },
+        "layoutConfig": {
+          "type": "string",
+          "description": "Filter by layoutConfig (exact match)"
+        },
+        "isShared": {
+          "type": "integer",
+          "description": "Filter by isShared (exact match)"
+        },
+        "createdAt.gt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter createdAt gt"
+        },
+        "createdAt.gte": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter createdAt gte"
+        },
+        "createdAt.lt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter createdAt lt"
+        },
+        "createdAt.lte": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter createdAt lte"
+        },
+        "modifiedAt.gt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter modifiedAt gt"
+        },
+        "modifiedAt.gte": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter modifiedAt gte"
+        },
+        "modifiedAt.lt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter modifiedAt lt"
+        },
+        "modifiedAt.lte": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter modifiedAt lte"
+        },
+        "deletedAt.gt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter deletedAt gt"
+        },
+        "deletedAt.gte": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter deletedAt gte"
+        },
+        "deletedAt.lt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter deletedAt lt"
+        },
+        "deletedAt.lte": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter deletedAt lte"
+        },
+        "isShared.gt": {
+          "type": "integer",
+          "description": "Filter isShared gt"
+        },
+        "isShared.gte": {
+          "type": "integer",
+          "description": "Filter isShared gte"
+        },
+        "isShared.lt": {
+          "type": "integer",
+          "description": "Filter isShared lt"
+        },
+        "isShared.lte": {
+          "type": "integer",
+          "description": "Filter isShared lte"
+        }
+      },
+      "additionalProperties": false
+    },
+    "_method": "get",
+    "_path": "/api/v1/custom-view",
+    "_pathParams": [],
+    "_queryParams": [
+      "id",
+      "createdAt",
+      "createdBy",
+      "modifiedAt",
+      "modifiedBy",
+      "deletedAt",
+      "tableName",
+      "name",
+      "description",
+      "layoutConfig",
+      "isShared",
+      "createdAt.gt",
+      "createdAt.gte",
+      "createdAt.lt",
+      "createdAt.lte",
+      "modifiedAt.gt",
+      "modifiedAt.gte",
+      "modifiedAt.lt",
+      "modifiedAt.lte",
+      "deletedAt.gt",
+      "deletedAt.gte",
+      "deletedAt.lt",
+      "deletedAt.lte",
+      "isShared.gt",
+      "isShared.gte",
+      "isShared.lt",
+      "isShared.lte"
+    ],
+    "_bodyFields": null
+  },
+  {
+    "name": "listInterviews",
+    "description": "List Interviews records",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Filter by id (exact match)"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter by createdAt (exact match)"
+        },
+        "createdBy": {
+          "type": "string",
+          "description": "Filter by createdBy (exact match)"
+        },
+        "modifiedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter by modifiedAt (exact match)"
+        },
+        "modifiedBy": {
+          "type": "string",
+          "description": "Filter by modifiedBy (exact match)"
+        },
+        "deletedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter by deletedAt (exact match)"
+        },
+        "applicationId": {
+          "type": "string",
+          "description": "Filter by applicationId (exact match)"
+        },
+        "scheduledBy": {
+          "type": "string",
+          "description": "Filter by scheduledBy (exact match)"
+        },
+        "organizationId": {
+          "type": "string",
+          "description": "Filter by organizationId (exact match)"
+        },
+        "durationMin": {
+          "type": "integer",
+          "description": "Filter by durationMin (exact match)"
+        },
+        "location": {
+          "type": "string",
+          "description": "Filter by location (exact match)"
+        },
+        "status": {
+          "type": "string",
+          "description": "Filter by status (exact match)"
+        },
+        "privateNotes": {
+          "type": "string",
+          "description": "Filter by privateNotes (exact match)"
+        },
+        "createdAt.gt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter createdAt gt"
+        },
+        "createdAt.gte": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter createdAt gte"
+        },
+        "createdAt.lt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter createdAt lt"
+        },
+        "createdAt.lte": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter createdAt lte"
+        },
+        "modifiedAt.gt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter modifiedAt gt"
+        },
+        "modifiedAt.gte": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter modifiedAt gte"
+        },
+        "modifiedAt.lt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter modifiedAt lt"
+        },
+        "modifiedAt.lte": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter modifiedAt lte"
+        },
+        "deletedAt.gt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter deletedAt gt"
+        },
+        "deletedAt.gte": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter deletedAt gte"
+        },
+        "deletedAt.lt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter deletedAt lt"
+        },
+        "deletedAt.lte": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter deletedAt lte"
+        },
+        "durationMin.gt": {
+          "type": "integer",
+          "description": "Filter durationMin gt"
+        },
+        "durationMin.gte": {
+          "type": "integer",
+          "description": "Filter durationMin gte"
+        },
+        "durationMin.lt": {
+          "type": "integer",
+          "description": "Filter durationMin lt"
+        },
+        "durationMin.lte": {
+          "type": "integer",
+          "description": "Filter durationMin lte"
+        }
+      },
+      "additionalProperties": false
+    },
+    "_method": "get",
+    "_path": "/api/v1/interviews",
+    "_pathParams": [],
+    "_queryParams": [
+      "id",
+      "createdAt",
+      "createdBy",
+      "modifiedAt",
+      "modifiedBy",
+      "deletedAt",
+      "applicationId",
+      "scheduledBy",
+      "organizationId",
+      "durationMin",
+      "location",
+      "status",
+      "privateNotes",
+      "createdAt.gt",
+      "createdAt.gte",
+      "createdAt.lt",
+      "createdAt.lte",
+      "modifiedAt.gt",
+      "modifiedAt.gte",
+      "modifiedAt.lt",
+      "modifiedAt.lte",
+      "deletedAt.gt",
+      "deletedAt.gte",
+      "deletedAt.lt",
+      "deletedAt.lte",
+      "durationMin.gt",
+      "durationMin.gte",
+      "durationMin.lt",
+      "durationMin.lte"
+    ],
+    "_bodyFields": null
+  },
+  {
+    "name": "listJobPostings",
+    "description": "List JobPostings records",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Filter by id (exact match)"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter by createdAt (exact match)"
+        },
+        "createdBy": {
+          "type": "string",
+          "description": "Filter by createdBy (exact match)"
+        },
+        "modifiedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter by modifiedAt (exact match)"
+        },
+        "modifiedBy": {
+          "type": "string",
+          "description": "Filter by modifiedBy (exact match)"
+        },
+        "deletedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter by deletedAt (exact match)"
+        },
+        "jobId": {
+          "type": "string",
+          "description": "Filter by jobId (exact match)"
+        },
+        "slug": {
+          "type": "string",
+          "description": "Filter by slug (exact match)"
+        },
+        "headline": {
+          "type": "string",
+          "description": "Filter by headline (exact match)"
+        },
+        "summary": {
+          "type": "string",
+          "description": "Filter by summary (exact match)"
+        },
+        "location": {
+          "type": "string",
+          "description": "Filter by location (exact match)"
+        },
+        "employmentType": {
+          "type": "string",
+          "description": "Filter by employmentType (exact match)"
+        },
+        "organizationId": {
+          "type": "string",
+          "description": "Filter by organizationId (exact match)"
+        },
+        "createdAt.gt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter createdAt gt"
+        },
+        "createdAt.gte": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter createdAt gte"
+        },
+        "createdAt.lt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter createdAt lt"
+        },
+        "createdAt.lte": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter createdAt lte"
+        },
+        "modifiedAt.gt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter modifiedAt gt"
+        },
+        "modifiedAt.gte": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter modifiedAt gte"
+        },
+        "modifiedAt.lt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter modifiedAt lt"
+        },
+        "modifiedAt.lte": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter modifiedAt lte"
+        },
+        "deletedAt.gt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter deletedAt gt"
+        },
+        "deletedAt.gte": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter deletedAt gte"
+        },
+        "deletedAt.lt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter deletedAt lt"
+        },
+        "deletedAt.lte": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Filter deletedAt lte"
+        }
+      },
+      "additionalProperties": false
+    },
+    "_method": "get",
+    "_path": "/api/v1/job-postings",
+    "_pathParams": [],
+    "_queryParams": [
+      "id",
+      "createdAt",
+      "createdBy",
+      "modifiedAt",
+      "modifiedBy",
+      "deletedAt",
+      "jobId",
+      "slug",
+      "headline",
+      "summary",
+      "location",
+      "employmentType",
       "organizationId",
       "createdAt.gt",
       "createdAt.gte",
@@ -1913,6 +3345,20 @@ const TOOLS: ToolEntry[] = [
     ]
   },
   {
+    "name": "scoreSummary",
+    "description": "Aggregate average rating per interview across the org.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "_method": "get",
+    "_path": "/api/v1/interviews/score-summary",
+    "_pathParams": [],
+    "_queryParams": [],
+    "_bodyFields": []
+  },
+  {
     "name": "sesStatus",
     "description": "Check SES email configuration status",
     "inputSchema": {
@@ -2028,6 +3474,20 @@ const TOOLS: ToolEntry[] = [
     ]
   },
   {
+    "name": "stats",
+    "description": "Count applications by status across the org",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "_method": "get",
+    "_path": "/api/v1/applications/stats",
+    "_pathParams": [],
+    "_queryParams": [],
+    "_bodyFields": []
+  },
+  {
     "name": "updateApplications",
     "description": "Update a Applications",
     "inputSchema": {
@@ -2057,6 +3517,51 @@ const TOOLS: ToolEntry[] = [
     ]
   },
   {
+    "name": "updateAtsImports",
+    "description": "Update a AtsImports",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "externalId": {
+          "type": "string"
+        },
+        "sourceSystem": {
+          "type": "string"
+        },
+        "payload": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "organizationId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "_method": "patch",
+    "_path": "/api/v1/ats-imports/{id}",
+    "_pathParams": [
+      "id"
+    ],
+    "_queryParams": [],
+    "_bodyFields": [
+      "externalId",
+      "sourceSystem",
+      "payload",
+      "error",
+      "organizationId"
+    ]
+  },
+  {
     "name": "updateCandidates",
     "description": "Update a Candidates",
     "inputSchema": {
@@ -2083,6 +3588,12 @@ const TOOLS: ToolEntry[] = [
         },
         "internalNotes": {
           "type": "string"
+        },
+        "legalName": {
+          "type": "string"
+        },
+        "governmentId": {
+          "type": "string"
         }
       },
       "required": [
@@ -2102,7 +3613,136 @@ const TOOLS: ToolEntry[] = [
       "phone",
       "resumeUrl",
       "source",
-      "internalNotes"
+      "internalNotes",
+      "legalName",
+      "governmentId"
+    ]
+  },
+  {
+    "name": "updateCustomView",
+    "description": "Update a CustomView",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "tableName": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "layoutConfig": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "_method": "patch",
+    "_path": "/api/v1/custom-view/{id}",
+    "_pathParams": [
+      "id"
+    ],
+    "_queryParams": [],
+    "_bodyFields": [
+      "tableName",
+      "name",
+      "description",
+      "layoutConfig"
+    ]
+  },
+  {
+    "name": "updateInterviews",
+    "description": "Update a Interviews",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "scheduledAt": {
+          "type": "string"
+        },
+        "durationMin": {
+          "type": "integer"
+        },
+        "location": {
+          "type": "string"
+        },
+        "privateNotes": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "_method": "patch",
+    "_path": "/api/v1/interviews/{id}",
+    "_pathParams": [
+      "id"
+    ],
+    "_queryParams": [],
+    "_bodyFields": [
+      "scheduledAt",
+      "durationMin",
+      "location",
+      "privateNotes"
+    ]
+  },
+  {
+    "name": "updateJobPostings",
+    "description": "Update a JobPostings",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "slug": {
+          "type": "string"
+        },
+        "headline": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "location": {
+          "type": "string"
+        },
+        "employmentType": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "_method": "patch",
+    "_path": "/api/v1/job-postings/{id}",
+    "_pathParams": [
+      "id"
+    ],
+    "_queryParams": [],
+    "_bodyFields": [
+      "slug",
+      "headline",
+      "summary",
+      "location",
+      "employmentType"
     ]
   },
   {
@@ -2258,6 +3898,40 @@ const TOOLS: ToolEntry[] = [
     ]
   },
   {
+    "name": "upsertBatch",
+    "description": "Idempotent batch upsert from an ATS feed.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "sourceSystem": {
+          "type": "string",
+          "enum": [
+            "greenhouse",
+            "lever",
+            "workday",
+            "other"
+          ]
+        },
+        "externalId": {
+          "type": "string"
+        },
+        "payload": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "_method": "post",
+    "_path": "/api/v1/ats-imports/upsert-batch",
+    "_pathParams": [],
+    "_queryParams": [],
+    "_bodyFields": [
+      "sourceSystem",
+      "externalId",
+      "payload"
+    ]
+  },
+  {
     "name": "verifyEmail",
     "description": "Verify email address with token",
     "inputSchema": {
@@ -2284,8 +3958,8 @@ const TOOLS: ToolEntry[] = [
 
 const PROTOCOL_VERSION = '2025-03-26';
 const SERVER_INFO = {
-  name: "q-recruit",
-  title: "q-recruit (MCP)",
+  name: "quickback-example-recruitment",
+  title: "quickback-example-recruitment (MCP)",
   version: '1.0.0',
 };
 

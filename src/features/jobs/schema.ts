@@ -40,6 +40,7 @@ export const jobs = sqliteTable("jobs", {
     deletedBy: text("deleted_by"),
   }, (t) => ({
   jobs_status_idx: index("jobs_status_idx").on(t.status),
+  jobs_organization_id_deleted_at_idx: index("jobs_organization_id_deleted_at_idx").on(t.organizationId, t.deletedAt)
 }));
 
 /**

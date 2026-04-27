@@ -39,8 +39,8 @@ export async function withFirewall<T>(
  * Guards configuration for field modification rules
  */
 export const GUARDS_CONFIG = {
-  createable: new Set<string>(['name', 'email', 'phone', 'resumeUrl', 'source', 'internalNotes']),
-  updatable: new Set<string>(['name', 'email', 'phone', 'resumeUrl', 'source', 'internalNotes']),
+  createable: new Set<string>(['name', 'email', 'phone', 'resumeUrl', 'source', 'internalNotes', 'legalName', 'governmentId']),
+  updatable: new Set<string>(['name', 'email', 'phone', 'resumeUrl', 'source', 'internalNotes', 'legalName', 'governmentId']),
   protected: {} as Record<string, Set<string>>,
   immutable: new Set<string>(),
   systemManaged: new Set<string>(['createdAt', 'createdBy', 'modifiedAt', 'modifiedBy', 'deletedAt', 'deletedBy', 'organizationId']),
@@ -172,6 +172,27 @@ export function maskCandidate<T extends Record<string, any>>(record: T, ctx: App
     }
   }
 
+  // legalName: show to admin, owner
+  if (!(ctx.roles?.some(r => ['admin', 'owner'].includes(r)))) {
+    if (masked['legalName'] != null) {
+      masked['legalName'] = masks.name(masked['legalName']);
+    }
+  }
+
+  // governmentId: show to admin, owner
+  if (!(ctx.roles?.some(r => ['admin', 'owner'].includes(r)))) {
+    if (masked['governmentId'] != null) {
+      masked['governmentId'] = masks.ssn(masked['governmentId']);
+    }
+  }
+
+  // resumeUrl: show to admin, owner OR owner
+  if (!(ctx.roles?.some(r => ['admin', 'owner'].includes(r)) || record.ownerId === ctx.userId)) {
+    if (masked['resumeUrl'] != null) {
+      masked['resumeUrl'] = masks.redact(masked['resumeUrl']);
+    }
+  }
+
   return masked as T;
 }
 
@@ -218,6 +239,7 @@ export const VIEWS_CONFIG = {
     "access": {
       "roles": [
         "member",
+        "recruiter",
         "admin",
         "owner"
       ]
@@ -244,7 +266,9 @@ export const VIEWS_CONFIG = {
       "phone",
       "resumeUrl",
       "source",
-      "internalNotes"
+      "internalNotes",
+      "legalName",
+      "governmentId"
     ],
     "access": {
       "roles": [

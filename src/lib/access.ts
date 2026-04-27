@@ -46,6 +46,11 @@ export async function evaluateAccess<TRecord = any>(
   ctx: AppContext,
   record?: TRecord
 ): Promise<boolean> {
+  // Platform-admin (user.role === 'admin') tier is universal — bypasses
+  // role/userRole/record checks. Distinct from org admin (member.role).
+  // Lives in the runtime helper so cross-tenant requests by platform
+  // admins (where ctx.roles is empty by construction) admit cleanly.
+  if (ctx.userRole === 'admin') return true;
   if (typeof access === 'function') {
     return await access(ctx, record);
   }
@@ -65,6 +70,10 @@ export async function evaluateAccessPreRecord<TRecord = any>(
   access: Access<TRecord>,
   ctx: AppContext
 ): Promise<boolean> {
+  // Platform-admin tier (mirrors evaluateAccess). The pre-record gate
+  // runs before the firewall query, so admitting here also avoids a
+  // useless DB roundtrip on every cross-tenant admin request.
+  if (ctx.userRole === 'admin') return true;
   if (typeof access === 'function') return true;
   return evaluateDeclarativeAccessPreRecord(access, ctx);
 }
@@ -101,6 +110,9 @@ export async function evaluateAccessReason<TRecord = any>(
   ctx: AppContext,
   record?: TRecord
 ): Promise<AccessFailureReason> {
+  // Platform-admin tier (mirrors evaluateAccess). Pass without classifying
+  // a failure reason — admins satisfy every clause.
+  if (ctx.userRole === 'admin') return null;
   if (typeof access === 'function') {
     const ok = await access(ctx, record);
     return ok ? null : 'record';

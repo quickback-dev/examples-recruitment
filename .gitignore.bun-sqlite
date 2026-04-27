@@ -1,0 +1,5 @@
+# Bun-SQLite Database Files
+data/
+*.db
+*.db-shm
+*.db-wal

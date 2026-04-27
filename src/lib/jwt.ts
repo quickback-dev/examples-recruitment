@@ -80,13 +80,18 @@ async function importKey(secret: string, usage: KeyUsage): Promise<CryptoKey> {
  *
  * @param payload - Claims to include (sub, orgId, role, etc.)
  * @param secret - Signing secret (BETTER_AUTH_SECRET)
- * @param expiresInSeconds - Token lifetime (default: 900 = 15 minutes)
+ * @param expiresInSeconds - Token lifetime (default: 180 = 3 minutes).
+ *   The fast-path verifier in middleware/auth.ts trusts the signature without
+ *   re-checking session state, ban status, or current org membership — so a
+ *   stolen or pre-revocation token works for the full TTL. Keeping the default
+ *   tight bounds the worst-case bad-state window. Long-lived sessions remain
+ *   valid via the session cookie; this is just the bearer-cache lifetime.
  * @returns Signed JWT string
  */
 export async function signJwt(
   payload: Omit<JwtPayload, 'iat' | 'exp'>,
   secret: string,
-  expiresInSeconds: number = 900
+  expiresInSeconds: number = 180
 ): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
   const fullPayload: JwtPayload = {

@@ -5,10 +5,10 @@
  * To make changes, update your config and feature definitions in the quickback/ folder,
  * then run `quickback compile` to regenerate.
  */
-import type { ActionExecutor } from "../../../lib/types";
+import { ActionExecutor, TransitionLostError } from "../../../lib/types";
 import { applications } from "../schema";
 
-export const execute: ActionExecutor = async ({ db, record, input, auditFields, whereRecord }) => {
+export const execute: ActionExecutor = async ({ db, record, input, auditFields, whereTransition }) => {
   const suffix = input.reason ? ` — ${input.reason}` : "";
   const appendedNotes = `${record.notes ?? ""}${record.notes ? "\n" : ""}Rejected${suffix}`.trim();
   const [updated] = await db
@@ -16,10 +16,11 @@ export const execute: ActionExecutor = async ({ db, record, input, auditFields, 
     .set({
       status: "rejected",
       notes: appendedNotes,
-      modifiedAt: auditFields.modifiedAt,
+      modifiedAt: auditFields!.modifiedAt,
     })
-    .where(whereRecord!(applications))
+    .where(whereTransition!(applications))
     .returning();
+  if (!updated) throw new TransitionLostError("status", record.status, "rejected");
   return updated;
 };
 

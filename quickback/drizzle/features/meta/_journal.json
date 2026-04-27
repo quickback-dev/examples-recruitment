@@ -8,6 +8,41 @@
       "when": 1777072409099,
       "tag": "0000_sharp_omega_red",
       "breakpoints": false
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1777251631839,
+      "tag": "0003_adorable_gateway",
+      "breakpoints": false
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1777300628720,
+      "tag": "0004_early_dracula",
+      "breakpoints": false
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1777304443020,
+      "tag": "0005_shallow_paibok",
+      "breakpoints": false
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1777304978199,
+      "tag": "0006_supreme_mach_iv",
+      "breakpoints": false
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1777306712010,
+      "tag": "0007_flawless_chronomancer",
+      "breakpoints": false
     }
   ]
 }

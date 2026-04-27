@@ -13,6 +13,8 @@ export interface CloudflareBindings {
   /** Features database - Application tables */
   DB: D1Database;
   KV: KVNamespace;
+  /** Static asset fetcher for CMS / Account SPA bundles */
+  ASSETS: Fetcher;
   BETTER_AUTH_SECRET: string;
   BETTER_AUTH_URL: string;
   ACCOUNT_URL?: string;

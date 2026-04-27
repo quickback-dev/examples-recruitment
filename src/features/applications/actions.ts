@@ -15,13 +15,14 @@ import { execute as advanceExecute } from './handlers/advance';
 import { execute as hireExecute } from './handlers/hire';
 import { execute as rejectExecute } from './handlers/reject';
 import { execute as withdrawExecute } from './handlers/withdraw';
+import { execute as statsExecute } from './handlers/stats';
 
 export const actions = {
   "advance": {
     description: "Move an application forward in the pipeline.",
     input: z.object({
       nextStatus: z.enum(["screening", "interview", "offer"]),
-      notes: z.string().optional(),
+      notes: z.string().max(2000).optional(),
     }),
     access: {
           "roles": [
@@ -68,7 +69,9 @@ export const actions = {
   "reject": {
     description: "Reject an application with an optional reason.",
     input: z.object({
-      reason: z.string().optional(),
+      // Bounded — reject's handler appends to existing notes, so unbounded
+      // reason text compounds across rejections.
+      reason: z.string().max(500).optional(),
     }),
     access: {
           "roles": [
@@ -102,8 +105,7 @@ export const actions = {
     access: {
           "roles": [
                 "owner",
-                "admin",
-                "member"
+                "admin"
           ]
     },
     transition: {
@@ -125,6 +127,18 @@ export const actions = {
           }
     },
     execute: withdrawExecute,
+  },
+  "stats": {
+    description: "Count applications by status across the org",
+    input: z.object({}),
+    access: {
+          "roles": [
+                "owner",
+                "admin",
+                "member"
+          ]
+    },
+    execute: statsExecute,
   }
 };
 

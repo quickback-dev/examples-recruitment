@@ -8,6 +8,83 @@
       "when": 1777072409405,
       "tag": "0000_slippery_thunderbolt_ross",
       "breakpoints": false
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1777240891736,
+      "tag": "0001_far_war_machine",
+      "breakpoints": false
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1777240987270,
+      "tag": "0002_empty_ghost_rider",
+      "breakpoints": false
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1777241310577,
+      "tag": "0003_awesome_true_believers",
+      "breakpoints": false
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1777241839154,
+      "tag": "0004_famous_maddog",
+      "breakpoints": false
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1777242268112,
+      "tag": "0005_yellow_white_queen",
+      "breakpoints": false
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1777243571172,
+      "tag": "0006_smart_bullseye",
+      "breakpoints": false
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1777243929976,
+      "tag": "0007_tearful_longshot",
+      "breakpoints": false
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1777251145538,
+      "tag": "0008_solid_reavers",
+      "breakpoints": false
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1777251226963,
+      "tag": "0009_brave_spyke",
+      "breakpoints": false
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1777251632143,
+      "tag": "0010_bumpy_susan_delgado",
+      "breakpoints": false
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1777252533242,
+      "tag": "0011_huge_silk_fever",
+      "breakpoints": false
     }
   ]
 }
